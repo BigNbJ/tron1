@@ -223,7 +223,7 @@ class BipedCfgWF(BaseConfig):
         randomize_inertia_range = [0.8, 1.2]
         push_robots = True
         push_interval_s = 7
-        max_push_vel_xy = 1.0 # 降低难度
+        max_push_vel_xy = 1.5
         rand_force = False
         force_resampling_time_s = 15
         max_force = 50.0
@@ -260,14 +260,13 @@ class BipedCfgWF(BaseConfig):
             same_foot_z_position = -100
             lin_vel_z = -0.3
             ang_vel_xy = -0.3
-            # 适当减小这些惩罚，允许它在初期稍微“抖动”一下以维持平衡
-            torques = -0.00005 # 原来是 -0.00016
+            torques = -0.00016
             dof_acc = -1.5e-7
-            action_rate = -0.01 # 原来是 -0.03
+            action_rate = -0.03
             dof_pos_limits = -2.0
             collision = -50
             action_smooth = -0.03
-            orientation = -20.0 # 加大姿态惩罚
+            orientation = -12.0
             feet_distance = -100
             base_height = -20
 
@@ -286,7 +285,7 @@ class BipedCfgWF(BaseConfig):
         )
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
-        base_height_target = 0.6 + 0.1664 # 降低高度，降低重心
+        base_height_target = 0.6 + 0.1664
         feet_height_target = 0.10
         min_feet_distance = 0.32
         max_feet_distance = 0.35

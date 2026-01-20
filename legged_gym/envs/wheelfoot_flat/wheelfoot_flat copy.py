@@ -44,8 +44,6 @@ class BipedWF(BaseTask):
         self._prepare_reward_function()
         self.init_done = True
 
-        print("关节名称顺序:", self.dof_names)
-
     def reset_idx(self, env_ids):
         if len(env_ids) == 0:
             return
@@ -167,8 +165,8 @@ class BipedWF(BaseTask):
         
         # pad for arm joints (6 joints)
         arm_zeros = torch.zeros((self.num_envs, 6), device=self.device)
-        pos_action = torch.cat((arm_zeros, pos_action), dim=1)
-        vel_action = torch.cat((arm_zeros, vel_action), dim=1)
+        pos_action = torch.cat((pos_action, arm_zeros), dim=1)
+        vel_action = torch.cat((vel_action, arm_zeros), dim=1)
 
         # pd controller
         torques = self.p_gains * (pos_action + self.default_dof_pos - self.dof_pos) + self.d_gains * (vel_action - self.dof_vel)
@@ -181,8 +179,7 @@ class BipedWF(BaseTask):
 
     def compute_group_observations(self):
         # note that observation noise need to modified accordingly !!!
-        # Base joints start at index 6
-        dof_list = [6, 7, 8, 10, 11, 12]
+        dof_list = [0,1,2,4,5,6]
         dof_pos = (self.dof_pos - self.default_dof_pos)[:,dof_list]
         # dof_pos = torch.remainder(dof_pos + self.pi, 2 * self.pi) - self.pi
 
@@ -191,7 +188,7 @@ class BipedWF(BaseTask):
                 self.base_ang_vel * self.obs_scales.ang_vel,
                 self.projected_gravity,
                 dof_pos * self.obs_scales.dof_pos,
-                self.dof_vel[:, 6:] * self.obs_scales.dof_vel,
+                self.dof_vel[:, :8] * self.obs_scales.dof_vel,
                 self.actions[:, :8],
                 # self.clock_inputs_sin.view(self.num_envs, 1),
                 # self.clock_inputs_cos.view(self.num_envs, 1),
@@ -408,11 +405,11 @@ class BipedWF(BaseTask):
 
     def _reward_torques(self):
         # Penalize torques
-        return torch.sum(torch.square(self.torques[:, 6:]), dim=1)
+        return torch.sum(torch.square(self.torques[:, :8]), dim=1)
 
     def _reward_dof_acc(self):
         # Penalize dof accelerations
-        return torch.sum(torch.square(self.dof_acc[:, 6:]), dim=1)
+        return torch.sum(torch.square(self.dof_acc[:, :8]), dim=1)
 
     def _reward_action_rate(self):
         # Penalize changes in actions
