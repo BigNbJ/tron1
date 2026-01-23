@@ -28,15 +28,50 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 from legged_gym.envs.base.base_config import BaseConfig
-
+import numpy as np
 
 class BipedCfgWF(BaseConfig):
     class env:
         num_envs = 8192
-        num_observations = 30 + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
+        num_proprio = 30 + 6 - 2 - 4 - 2 # Keep original calculation logic
+        # 3 (ee_goal) + 3 (ee_delta_orn) + 6 (arm_pos) + 6 (arm_vel) = 18
+        # But we need to check how compute_group_observations is implemented.
+        # It seems previous implementation had hardcoded num_observations.
+        # Let's update it to reflect new observations:
+        # Base: base_ang_vel(3) + proj_grav(3) + base_dof_pos(8) + base_dof_vel(8) + actions(8) = 30
+        # Arm: ee_goal(3) + ee_delta_orn(3) + arm_dof_pos(6) + arm_dof_vel(6) + arm_actions(6) = 24
+        # Total = 54. 
+        # Wait, previous was 48. Let's recount compute_group_observations.
+        # obs_buf = cat(
+        #    base_ang_vel (3),
+        #    projected_gravity (3),
+        #    dof_pos (6), -> This is base dof pos? No, dof_list has 6 elements?
+        #    dof_vel[:, 6:] (8), -> Base dof vel (8)
+        #    actions[:, 6:] (8), -> Base actions (8)
+        #    curr_ee_goal (3),
+        #    ee_goal_delta_orn_euler (3),
+        #    arm_dof_pos (6),
+        #    arm_dof_vel (6),
+        #    actions[:, :6] (6)
+        # )
+        # Sum: 3+3+6+8+8+3+3+6+6+6 = 52?
+        # Let's check compute_group_observations logic again.
+        # dof_list = [6, 7, 8, 10, 11, 12] -> 6 elements. These are specific base joints?
+        # Wait, num_dof is 14. 
+        # Base has 8 joints.
+        # dof_pos is sliced by dof_list. 6 elements.
+        # So: 3 + 3 + 6 + 8 + 8 + 3 + 3 + 6 + 6 + 6 = 52.
+        
+        # But wait, the error says:
+        # RuntimeError: shape mismatch: value tensor of shape [8192, 520] cannot be broadcast to indexing result of shape [8192, 480]
+        # 520 / 10 = 52.
+        # 480 / 10 = 48.
+        # So actual observation size is 52, but num_observations is set to 48.
+        
+        num_observations = 55
         num_critic_observations = 3 + num_observations
         num_height_samples = 117
-        num_actions = 8 + 6
+        num_actions = 14
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
         episode_length_s = 20  # episode length in seconds
@@ -87,25 +122,63 @@ class BipedCfgWF(BaseConfig):
         )
 
     class commands:
-        curriculum = False
-        smooth_max_lin_vel_x = 2.0
-        smooth_max_lin_vel_y = 1.0
-        non_smooth_max_lin_vel_x = 1.0
-        non_smooth_max_lin_vel_y = 1.0
-        max_ang_vel_yaw = 3.0
-        curriculum_threshold = 0.75
-        num_commands = 3  # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
-        resampling_time = 5.0  # time before command are changed[s]
-        heading_command = False  # if true: compute ang vel command from heading error, only work on adaptive group
-        min_norm = 0.1
+        heading_command = False
+        curriculum = True # Enable curriculum for commands
+        num_commands = 3
+        resampling_time = 3. # time before command are changed[s]
+
+        lin_vel_x_schedule = [0, 1]
+        ang_vel_yaw_schedule = [0, 1]
+        tracking_ang_vel_yaw_schedule = [0, 1]
+
+        ang_vel_yaw_clip = 0.6
+        lin_vel_x_clip = 0.3
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
-            lin_vel_y = [0, 0]  # min max [m/s]
-            # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
-            # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
-            ang_vel_yaw = [-0.6, 0.6]  # min max [rad/s]
+            final_lin_vel_x = [0, 0.9] # min max [m/s]
+            # lin_vel_y = [0, 0]   # min max [m/s]
+            final_ang_vel_yaw = [-1.0, 1.0]    # min max [rad/s]
+            init_lin_vel_x = [0, 0]
+            init_ang_vel_yaw = [0, 0]
+            
+            final_tracking_ang_vel_yaw_exp = 0.15
+            
+            # Keep original structure for compatibility if needed, or override completely
+            lin_vel_x = [-1.0, 1.0]  # This might be overridden by curriculum logic
+            lin_vel_y = [0, 0]
+            ang_vel_yaw = [-0.6, 0.6]
             heading = [-3.14159, 3.14159]
+
+    class goal_ee:
+        num_commands = 3
+        traj_time = [1, 3]
+        hold_time = [0.5, 2]
+        collision_upper_limits = [0.3, 0.15, 0.05 - 0.165]
+        collision_lower_limits = [-0.2, -0.15, -0.35 - 0.165]
+        underground_limit = -0.57
+        num_collision_check_samples = 10
+        command_mode = 'sphere'
+
+        l_schedule = [24 * 1000, 24 * 3000]
+        p_schedule = [24 * 1000, 24 * 3000]
+        y_schedule = [24 * 1000, 24 * 3000]
+        tracking_ee_reward_schedule = [24 * 1000, 24 * 3000]
+        
+        class ranges:
+            final_pos_l = [0.40, 0.7] 
+            final_pos_p = [0.8, 1.2] 
+            final_pos_y = [-0.4, 0.4] 
+            
+            init_pos_l = [0.40, 0.50] 
+            init_pos_p = [0.9, 1.1]  
+            init_pos_y = [-0.2, 0.2]
+
+            final_delta_orn = [[-0, 0], [-0, 0], [-0, 0]]
+
+            final_tracking_ee_reward = 6.0
+
+        sphere_error_scale = [1 / (ranges.final_pos_l[1] - ranges.final_pos_l[0]), 1 / (ranges.final_pos_p[1] - ranges.final_pos_p[0]), 1 / (ranges.final_pos_y[1] - ranges.final_pos_y[0])]
+        orn_error_scale = [2 / np.pi, 2 / np.pi, 2 / np.pi]
 
     class gait:
         num_gait_params = 4
@@ -147,6 +220,7 @@ class BipedCfgWF(BaseConfig):
     class control:
         action_scale_pos = 0.25
         action_scale_vel = 0.5
+        action_scale_vel_wheel = 5.0
         control_type = "P"
         stiffness = {
             "abad_L_Joint": 42,
@@ -157,12 +231,12 @@ class BipedCfgWF(BaseConfig):
             "knee_R_Joint": 42,
             "wheel_L_Joint": 0.0,
             "wheel_R_Joint": 0.0,
-            "J1": 100.0,
-            "J2": 100.0,
-            "J3": 100.0,
-            "J4": 100.0,
-            "J5": 100.0,
-            "J6": 100.0,
+            "J1": 25.0,
+            "J2": 25.0,
+            "J3": 25.0,
+            "J4": 25.0,
+            "J5": 25.0,
+            "J6": 25.0,
         }  # [N*m/rad]
         damping = {
             "abad_L_Joint": 2.5,
@@ -173,12 +247,12 @@ class BipedCfgWF(BaseConfig):
             "knee_R_Joint": 2.5,
             "wheel_L_Joint": 0.8,
             "wheel_R_Joint": 0.8,
-            "J1": 2.0,
-            "J2": 2.0,
-            "J3": 2.0,
-            "J4": 2.0,
-            "J5": 2.0,
-            "J6": 2.0,
+            "J1": 1.5,
+            "J2": 1.5,
+            "J3": 1.5,
+            "J4": 1.5,
+            "J5": 1.5,
+            "J6": 1.5,
         }  # [N*m*s/rad]
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 4
@@ -245,13 +319,15 @@ class BipedCfgWF(BaseConfig):
     class rewards:
         class scales:
             # termination related rewards
-            keep_balance = 1.0
+            keep_balance = 10.0
 
             # tracking related rewards
             tracking_lin_vel = 4.0
             tracking_ang_vel = 2.0
             tracking_lin_vel_pb = 1.0
             tracking_ang_vel_pb = 0.2
+            tracking_lin_vel_x_exp = 0.
+            tracking_ang_vel_yaw_exp = 0.15 # curriculum updated
 
             # regulation related rewards
             nominal_foot_position = 4.0
@@ -271,11 +347,21 @@ class BipedCfgWF(BaseConfig):
             feet_distance = -100
             base_height = -20
 
+        class arm_scales:
+            termination = -0.0
+            tracking_ee_sphere = 4 # curriculum updated
+            tracking_ee_cart = 0.0
+            arm_orientation = -0.
+            arm_energy_abs_sum = -0.0040
+            tracking_ee_orn = 0.
+            tracking_ee_orn_ry = 0.
+
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
         clip_single_reward = 5
         tracking_sigma = 0.2  # tracking reward = exp(-error^2/sigma)
         ang_tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
+        tracking_ee_sigma = 1 # added for arm
         nominal_foot_position_tracking_sigma = 0.005
         nominal_foot_position_tracking_sigma_wrt_v = 0.5
         leg_symmetry_tracking_sigma = 0.001
@@ -286,7 +372,7 @@ class BipedCfgWF(BaseConfig):
         )
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
-        base_height_target = 0.6 + 0.1664 # 降低高度，降低重心
+        base_height_target = 0.6 + 0.1664
         feet_height_target = 0.10
         min_feet_distance = 0.32
         max_feet_distance = 0.35
