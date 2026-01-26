@@ -165,13 +165,20 @@ class BipedCfgWF(BaseConfig):
         tracking_ee_reward_schedule = [24 * 1000, 24 * 3000]
         
         class ranges:
-            final_pos_l = [0.40, 0.7] 
-            final_pos_p = [0.8, 1.2] 
-            final_pos_y = [-0.4, 0.4] 
+            # final_pos_l = [0.40, 0.7] 
+            # final_pos_p = [0.8, 1.2] 
+            # final_pos_y = [-0.4, 0.4] 
+            
+            # init_pos_l = [0.40, 0.50] 
+            # init_pos_p = [0.9, 1.1]  
+            # init_pos_y = [-0.2, 0.2]
+            final_pos_l = [0.45, 0.8] 
+            final_pos_p = [0.9, 1.5]  
+            final_pos_y = [-1.0, 1.0]
             
             init_pos_l = [0.40, 0.50] 
             init_pos_p = [0.9, 1.1]  
-            init_pos_y = [-0.2, 0.2]
+            init_pos_y = [-0.5, 0.5]
 
             final_delta_orn = [[-0, 0], [-0, 0], [-0, 0]]
 

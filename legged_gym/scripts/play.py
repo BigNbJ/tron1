@@ -45,7 +45,74 @@ from legged_gym.utils import (
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import csv
+from datetime import datetime
 
+def sphere2cart(sphere_coords):
+    l = sphere_coords[..., 0]
+    p = sphere_coords[..., 1]
+    y = sphere_coords[..., 2]
+    
+    pitch_sin = torch.sin(p)
+    pitch_cos = torch.cos(p)
+    yaw_sin = torch.sin(y)
+    yaw_cos = torch.cos(y)
+    proj_len = l * pitch_cos
+    
+    cart = torch.zeros_like(sphere_coords)
+    cart[..., 0] = proj_len * yaw_cos
+    cart[..., 1] = proj_len * yaw_sin
+    cart[..., 2] = l * pitch_sin
+    return cart
+
+def plot_custom_states(log, dt):
+    # Plot Base Height
+    if "base_height" in log:
+        time = np.linspace(0, len(log["base_height"])*dt, len(log["base_height"]))
+        plt.figure()
+        plt.plot(time, log["base_height"], label='Base Height')
+        plt.xlabel('Time [s]')
+        plt.ylabel('Height [m]')
+        plt.title('Base Height')
+        plt.legend()
+    
+    # Plot Torques
+    if "dof_torques" in log:
+        torques = np.array(log["dof_torques"])
+        num_dof = torques.shape[1]
+        time = np.linspace(0, len(torques)*dt, len(torques))
+        plt.figure()
+        for i in range(num_dof):
+            plt.plot(time, torques[:, i], label=f'Joint {i}')
+        plt.xlabel('Time [s]')
+        plt.ylabel('Torque [Nm]')
+        plt.title('Joint Torques')
+        plt.legend()
+
+    # Plot EE Position
+    if "ee_target_x" in log:
+        time = np.linspace(0, len(log["ee_target_x"])*dt, len(log["ee_target_x"]))
+        fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+        # X
+        axs[0].plot(time, log["ee_target_x"], label='Target X')
+        if "ee_meas_x" in log: axs[0].plot(time, log["ee_meas_x"], label='Measured X')
+        axs[0].set_ylabel('X [m]')
+        axs[0].legend()
+        axs[0].set_title('EE Position Tracking')
+        # Y
+        axs[1].plot(time, log["ee_target_y"], label='Target Y')
+        if "ee_meas_y" in log: axs[1].plot(time, log["ee_meas_y"], label='Measured Y')
+        axs[1].set_ylabel('Y [m]')
+        axs[1].legend()
+        # Z
+        axs[2].plot(time, log["ee_target_z"], label='Target Z')
+        if "ee_meas_z" in log: axs[2].plot(time, log["ee_meas_z"], label='Measured Z')
+        axs[2].set_ylabel('Z [m]')
+        axs[2].set_xlabel('Time [s]')
+        axs[2].legend()
+        
+        plt.tight_layout()
+        plt.show()
 
 def play(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
@@ -77,6 +144,10 @@ def play(args):
     robot_type = os.getenv("ROBOT_TYPE")
     commands_val = to_torch([0.5, 0.0, 0, 0], device=env.device) if robot_type.startswith("PF")\
         else to_torch([1.0, 0.0, 0.0], device=env.device) if robot_type == "WF_TRON1A" else to_torch([1.5, 0.0, 0.0, 0.0, 0.0])
+    
+    # Define fixed EE target in Base Frame (Length, Pitch, Yaw)
+    # ee_target_sphere = to_torch([0.7, 1.2, -0.5], device=env.device) 
+    # ee_target_cart = sphere2cart(ee_target_sphere)
     action_scale = env.cfg.control.action_scale_pos if robot_type == "WF_TRON1A"\
         else env.cfg.control.action_scale
     obs, obs_history, commands, _ = env.get_observations()
@@ -120,7 +191,7 @@ def play(args):
     logger = Logger(env.dt)
     robot_index = 5  # which robot is used for logging
     joint_index = 1  # which joint is used for logging
-    stop_state_log = 100  # number of steps before plotting states
+    stop_state_log = 500  # number of steps before plotting states
     stop_rew_log = (
         env.max_episode_length + 1
     )  # number of steps before print average episode rewards
@@ -134,6 +205,31 @@ def play(args):
         actions = policy(torch.cat((est, obs, commands), dim=-1).detach())
 
         env.commands[:, :] = commands_val
+
+        # Update EE target to follow a trajectory (Sinusoidal Yaw)
+        t = i * env.dt
+        traj_freq = 0.5  # Hz
+        traj_amp_yaw = 0.8  # rad
+        
+        # Calculate new target (LPY)
+        # Keep Length and Pitch constant, vary Yaw
+        new_yaw = traj_amp_yaw * np.sin(2 * np.pi * traj_freq * t)
+        new_yaw = 0
+        ee_target_sphere = to_torch([0.44, 1.18, new_yaw], device=env.device)
+        ee_target_cart = sphere2cart(ee_target_sphere)
+
+        # Override EE goal if environment supports it
+        if hasattr(env, 'curr_ee_goal_sphere'):
+            env.curr_ee_goal_sphere[:] = ee_target_sphere
+            env.ee_goal_sphere[:] = ee_target_sphere
+            env.ee_start_sphere[:] = ee_target_sphere
+            if hasattr(env, 'curr_ee_goal_cart'):
+                env.curr_ee_goal_cart[:] = ee_target_cart
+                env.ee_goal_cart[:] = ee_target_cart
+            if hasattr(env, 'traj_total_timesteps'):
+                env.traj_total_timesteps[:] = 10000.0 # Prevent resampling
+            if hasattr(env, 'goal_timer'):
+                env.goal_timer[:] = 0.0
 
         obs, rews, dones, infos, obs_history, commands, _ = env.step(
             actions.detach()
@@ -160,8 +256,31 @@ def play(args):
             # env.set_camera(camera_position, target_position)
 
         if i < stop_state_log:
+            # Calculate EE target in Base frame
+            ee_goal_sphere = env.curr_ee_goal_sphere[robot_index, :].unsqueeze(0)
+            ee_goal_cart_base = sphere2cart(ee_goal_sphere)
+            
+            # Calculate EE measured in Base frame
+            # 1. Get world EE pos
+            ee_meas_world = env.ee_pos[robot_index, :].unsqueeze(0)
+            # 2. Subtract base pos -> relative vector in world frame
+            rel_pos_world = ee_meas_world - env.root_states[robot_index, :3].unsqueeze(0)
+            # 3. Rotate by inverse base quat -> relative vector in base frame
+            base_quat = env.base_quat[robot_index, :].unsqueeze(0)
+            ee_meas_base = quat_rotate_inverse(base_quat, rel_pos_world)
+            
+            base_height_val = env.base_height[robot_index].item() if hasattr(env, 'base_height') else env.root_states[robot_index, 2].item()
+            
+            # Calculate Base Yaw
+            quat = env.base_quat[robot_index, :].unsqueeze(0)
+            _, _, yaw_val = get_euler_xyz(quat)
+
             logger.log_states(
                 {
+                    "base_pos_x": env.root_states[robot_index, 0].item(),
+                    "base_pos_y": env.root_states[robot_index, 1].item(),
+                    "base_pos_z": env.root_states[robot_index, 2].item(),
+                    "base_yaw": yaw_val.item(),
                     "dof_pos_target": actions[robot_index, joint_index].item() * action_scale,
                     "dof_pos": (
                         env.dof_pos[robot_index, joint_index]
@@ -169,6 +288,7 @@ def play(args):
                     ).item(),
                     "dof_vel": env.dof_vel[robot_index, joint_index].item(),
                     "dof_torque": env.torques[robot_index, joint_index].item(),
+                    "dof_torques": env.torques[robot_index, :].detach().cpu().numpy(),
                     "command_x": env.commands[robot_index, 0].item(),
                     "command_y": env.commands[robot_index, 1].item(),
                     "command_yaw": env.commands[robot_index, 2].item(),
@@ -182,6 +302,13 @@ def play(args):
                     ]
                     .cpu()
                     .numpy(),
+                    "base_height": base_height_val,
+                    "ee_target_x": ee_goal_cart_base[0, 0].item(),
+                    "ee_target_y": ee_goal_cart_base[0, 1].item(),
+                    "ee_target_z": ee_goal_cart_base[0, 2].item(),
+                    "ee_meas_x": ee_meas_base[0, 0].item(),
+                    "ee_meas_y": ee_meas_base[0, 1].item(),
+                    "ee_meas_z": ee_meas_base[0, 2].item(),
                 }
             )
             # print(torch.sum(env.power[robot_index, :]).item())
@@ -198,6 +325,60 @@ def play(args):
                 )
         elif i == stop_state_log:
             logger.plot_states()
+            plot_custom_states(logger.state_log, env.dt)
+
+            # Save data for scientific plotting
+            log_dir = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.task, train_cfg.runner.experiment_name)
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Generate timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            
+            save_path = os.path.join(log_dir, f"play_log_{timestamp}.npz")
+            # Convert lists to numpy arrays
+            data_to_save = {k: np.array(v) for k, v in logger.state_log.items()}
+            np.savez(save_path, **data_to_save)
+            print(f"Logged states saved to {save_path}")
+
+            # Save as CSV for Origin
+            csv_path = os.path.join(log_dir, f"play_log_{timestamp}.csv")
+            
+            # Flatten dictionary for CSV (handle array columns)
+            flat_data = {}
+            row_count = 0
+            
+            # First pass: determine structure and length
+            for key, value in logger.state_log.items():
+                if len(value) == 0: continue
+                row_count = len(value)
+                
+                # Check type of first element to decide if flattening is needed
+                first_elem = value[0]
+                if hasattr(first_elem, '__len__') and not isinstance(first_elem, str):
+                    # It's an array/list (e.g. torques, forces)
+                    dim = len(first_elem)
+                    for j in range(dim):
+                        flat_data[f"{key}_{j}"] = [v[j] for v in value]
+                else:
+                    # Scalar
+                    flat_data[key] = value
+
+            # Write to CSV
+            if row_count > 0:
+                # Add Time column
+                flat_data["Time"] = [k * env.dt for k in range(row_count)]
+                
+                # Sort keys but keep Time first
+                keys = sorted([k for k in flat_data.keys() if k != "Time"])
+                keys.insert(0, "Time")
+                
+                with open(csv_path, 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(keys) # Header
+                    for i in range(row_count):
+                        row = [flat_data[k][i] for k in keys]
+                        writer.writerow(row)
+                print(f"Logged states saved to {csv_path} (Origin compatible)")
 
         if 0 < i < stop_rew_log:
             if infos["episode"]:

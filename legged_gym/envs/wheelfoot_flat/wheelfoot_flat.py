@@ -658,7 +658,8 @@ class BipedWF(BaseTask):
         self.reward_scales['tracking_ang_vel_yaw_exp'] = self._get_curriculum_value(self.tracking_ang_vel_yaw_schedule, 0, self.final_tracking_ang_vel_yaw_exp, self.update_counter) * self.dt
 
     def _resample_ee_goal(self, env_ids, is_init=False):
-        self.ee_start_sphere[env_ids] = self.curr_ee_goal_sphere[env_ids]
+        if not is_init:
+            self.ee_start_sphere[env_ids] = self.curr_ee_goal_sphere[env_ids]
         
         # Sample new goal in sphere coordinates
         goal_l = torch_rand_float(self.goal_ee_l_ranges[0], self.goal_ee_l_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
@@ -673,17 +674,6 @@ class BipedWF(BaseTask):
         # x = l * cos(p) * cos(y)
         # y = l * cos(p) * sin(y)
         # z = l * sin(p)
-        # Note: definition of p (pitch) and y (yaw) depends on coordinate system conventions. 
-        # Assuming standard spherical: p from xy plane, y around z axis.
-        # Actually in WidowGo1 implementation:
-        # pitch_sin = torch.sin(target_ee_pitch)
-        # pitch_cos = torch.cos(target_ee_pitch)
-        # yaw_sin = torch.sin(target_ee_yaw)
-        # yaw_cos = torch.cos(target_ee_yaw)
-        # proj_len = target_ee_len * pitch_cos
-        # self.target_ee[env_ids, 0] = proj_len * yaw_cos
-        # self.target_ee[env_ids, 1] = proj_len * yaw_sin
-        # self.target_ee[env_ids, 2] = target_ee_len * pitch_sin
         
         pitch_sin = torch.sin(goal_p)
         pitch_cos = torch.cos(goal_p)
@@ -705,13 +695,28 @@ class BipedWF(BaseTask):
         # Reset timers
         self.goal_timer[env_ids] = 0.
         if is_init:
-             self.curr_ee_goal_sphere[env_ids] = self.ee_goal_sphere[env_ids]
-             self.curr_ee_goal_cart[env_ids] = self.ee_goal_cart[env_ids]
-             self.ee_start_sphere[env_ids] = self.ee_goal_sphere[env_ids]
-             self.traj_total_timesteps[env_ids] = 0. # Force immediate resample next step? No, keep hold time or init with 0 wait? 
-             # Actually if is_init, we want to stay there for a bit or start moving immediately?
-             # Let's respect the sampled hold time. But since start=goal, moving phase is effectively holding.
-             # So total time is valid.
+             # Sample a random start point
+             start_l = torch_rand_float(self.goal_ee_l_ranges[0], self.goal_ee_l_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+             start_p = torch_rand_float(self.goal_ee_p_ranges[0], self.goal_ee_p_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+             start_y = torch_rand_float(self.goal_ee_y_ranges[0], self.goal_ee_y_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+             
+             self.ee_start_sphere[env_ids, 0] = start_l
+             self.ee_start_sphere[env_ids, 1] = start_p
+             self.ee_start_sphere[env_ids, 2] = start_y
+
+             self.curr_ee_goal_sphere[env_ids] = self.ee_start_sphere[env_ids]
+             
+             # Compute cartesian for start point
+             p_sin = torch.sin(start_p)
+             p_cos = torch.cos(start_p)
+             y_sin = torch.sin(start_y)
+             y_cos = torch.cos(start_y)
+             p_len = start_l * p_cos
+             
+             self.curr_ee_goal_cart[env_ids, 0] = p_len * y_cos
+             self.curr_ee_goal_cart[env_ids, 1] = p_len * y_sin
+             self.curr_ee_goal_cart[env_ids, 2] = start_l * p_sin
+
     
     def update_curr_ee_goal(self):
         self.goal_timer += self.dt
