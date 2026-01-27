@@ -33,7 +33,7 @@ from legged_gym.envs.base.base_config import BaseConfig
 class BipedCfgWF(BaseConfig):
     class env:
         num_envs = 8192
-        num_observations = 30 + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
+        num_observations = 30 # + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
         num_critic_observations = 3 + num_observations
         num_height_samples = 117
         num_actions = 8
@@ -94,18 +94,19 @@ class BipedCfgWF(BaseConfig):
         non_smooth_max_lin_vel_y = 1.0
         max_ang_vel_yaw = 3.0
         curriculum_threshold = 0.75
-        num_commands = 3  # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        num_commands = 5  # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error), jump_height
         resampling_time = 5.0  # time before command are changed[s]
         heading_command = False  # if true: compute ang vel command from heading error, only work on adaptive group
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
+            lin_vel_x = [-2.0, 2.0]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
             ang_vel_yaw = [-0.6, 0.6]  # min max [rad/s]
             heading = [-3.14159, 3.14159]
+            jump_height = [0.1, 0.3]
 
     class gait:
         num_gait_params = 4
@@ -251,6 +252,12 @@ class BipedCfgWF(BaseConfig):
             orientation = -12.0
             feet_distance = -100
             base_height = -20
+
+            # Jump rewards
+            jump = 10.0
+            jump_height_tracking = 5.0
+            leg_retraction = 2.0
+
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100

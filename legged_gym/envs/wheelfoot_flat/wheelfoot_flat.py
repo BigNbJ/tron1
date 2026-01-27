@@ -134,7 +134,7 @@ class BipedWF(BaseTask):
             self.reset_buf,
             self.extras,
             self.obs_history,
-            self.commands[:, :3] * self.commands_scale,
+            self.commands[:, :self.cfg.commands.num_commands] * self.commands_scale,
             self.critic_obs_buf # make sure critic_obs update in every for loop
         )
         
@@ -173,8 +173,8 @@ class BipedWF(BaseTask):
 
     def compute_group_observations(self):
         # note that observation noise need to modified accordingly !!!
-        dof_list = [0,1,2,4,5,6]
-        dof_pos = (self.dof_pos - self.default_dof_pos)[:,dof_list]
+        # dof_list = [0,1,2,4,5,6]
+        dof_pos = (self.dof_pos - self.default_dof_pos) #[:,dof_list]
         # dof_pos = torch.remainder(dof_pos + self.pi, 2 * self.pi) - self.pi
 
         obs_buf = torch.cat(
@@ -284,6 +284,31 @@ class BipedWF(BaseTask):
             heading = torch.atan2(forward[:,1], forward[:,0])
             self.commands[env_ids[zero_cmd_env_idx_], 3] = heading
             
+        # Jump command sampling
+        if self.cfg.commands.num_commands > 4:
+            # Default to 0
+            self.commands[env_ids, 4] = 0.0
+            
+            # 20% chance to jump
+            jump_prob = 0.2
+            jump_mask = torch.rand(len(env_ids), device=self.device) < jump_prob
+            jump_indices = env_ids[jump_mask]
+            
+            if len(jump_indices) > 0:
+                # Set jump height (delta)
+                self.commands[jump_indices, 4] = (
+                    self.command_ranges["jump_height"][1]
+                    - self.command_ranges["jump_height"][0]
+                ) * torch.rand(len(jump_indices), device=self.device) + self.command_ranges["jump_height"][0]
+                
+                # Enforce forward acceleration for jumpers
+                # Set v_x to max
+                self.commands[jump_indices, 0] = self.command_ranges["lin_vel_x"][jump_indices, 1]
+                # Reset lateral/angular velocity for stability
+                self.commands[jump_indices, 1] = 0.0
+                self.commands[jump_indices, 2] = 0.0
+
+            
     def _get_noise_scale_vec(self, cfg):
         """Sets a vector used to scale the noise added to the observations.
             [NOTE]: Must be adapted when changing the observations structure
@@ -315,6 +340,31 @@ class BipedWF(BaseTask):
         super()._init_buffers()
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
+        
+        # Update commands_scale to match num_commands
+        if self.cfg.commands.num_commands > 3:
+            # Re-create commands_scale with appropriate size
+            scales = [self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel]
+            
+            # Fill remaining scales with 1.0 (or specific values if needed)
+            # Index 3: Heading (if used)
+            # Index 4: Jump height
+            for i in range(3, self.cfg.commands.num_commands):
+                scales.append(1.0)
+                
+            self.commands_scale = torch.tensor(
+                scales,
+                device=self.device,
+                requires_grad=False,
+            )
+
+    def get_observations(self):
+        return (
+            self.obs_buf,
+            self.obs_history,
+            self.commands[:, :self.cfg.commands.num_commands] * self.commands_scale,
+            self.critic_obs_buf
+        )
 
     # ------------ reward functions----------------
 
@@ -373,9 +423,80 @@ class BipedWF(BaseTask):
         reward = torch.abs(foot_x_position_err)
         return reward
 
+    def _get_wheel_contacts(self):
+        # Heuristic: foot height < 0.05 (wheel radius approx)
+        # Assuming flat ground at z=0
+        return self.foot_positions[:, :, 2] < 0.15
+
+    def _reward_jump(self):
+        # Heuristic based jump reward
+        jump_cmd = self.commands[:, 4]
+        is_jumping = jump_cmd > 0.05
+        
+        if not torch.any(is_jumping):
+            return torch.zeros(self.num_envs, device=self.device)
+            
+        contacts = self._get_wheel_contacts() # shape (num_envs, num_feet)
+        in_air = torch.all(~contacts, dim=1)
+        on_ground = torch.any(contacts, dim=1)
+        
+        target_h = self.cfg.rewards.base_height_target + jump_cmd
+        
+        # Reward 1: Push off (Ground & Moving Up)
+        push_reward = torch.zeros_like(jump_cmd)
+        push_cond = is_jumping & on_ground & (self.base_lin_vel[:, 2] > 0.1)
+        push_reward[push_cond] = self.base_lin_vel[push_cond, 2]
+        
+        # Reward 2: Flight Height (Air)
+        flight_reward = torch.zeros_like(jump_cmd)
+        height_error = target_h - self.base_height
+        flight_cond = is_jumping & in_air
+        flight_reward[flight_cond] = torch.exp(-torch.square(height_error[flight_cond]) / 0.05)
+        
+        return push_reward + flight_reward
+
+    def _reward_jump_height_tracking(self):
+        jump_cmd = self.commands[:, 4]
+        is_jumping = jump_cmd > 0.05
+        
+        if not torch.any(is_jumping):
+            return torch.zeros(self.num_envs, device=self.device)
+
+        target_h = self.cfg.rewards.base_height_target + jump_cmd
+        error = (self.base_height - target_h)
+        
+        reward = torch.exp(-torch.square(error) / 0.1)
+        reward[~is_jumping] = 0.0
+        return reward
+
+    def _reward_leg_retraction(self):
+        jump_cmd = self.commands[:, 4]
+        is_jumping = jump_cmd > 0.05
+        
+        if not torch.any(is_jumping):
+            return torch.zeros(self.num_envs, device=self.device)
+            
+        contacts = self._get_wheel_contacts()
+        in_air = torch.all(~contacts, dim=1)
+        
+        foot_z_rel = self.foot_positions[:, :, 2] - self.base_position[:, 2].unsqueeze(1)
+        
+        # Target retraction: feet should be close to body vertically (e.g. -0.3m)
+        target_retraction = -0.3
+        error = foot_z_rel - target_retraction
+        reward = torch.sum(torch.exp(-torch.square(error) / 0.05), dim=1) / self.foot_positions.shape[1]
+        
+        reward[~(is_jumping & in_air)] = 0.0
+        return reward
+
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2])
+        reward = torch.square(self.base_lin_vel[:, 2])
+        if self.cfg.commands.num_commands > 4:
+            jump_cmd = self.commands[:, 4]
+            is_jumping = jump_cmd > 0.05
+            reward[is_jumping] = 0.0
+        return reward
 
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
@@ -418,7 +539,13 @@ class BipedWF(BaseTask):
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
+        reward = torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
+        if self.cfg.commands.num_commands > 4:
+            jump_cmd = self.commands[:, 4]
+            is_jumping = jump_cmd > 0.05
+            # Don't penalize tracking error during jump (give max reward)
+            reward[is_jumping] = 1.0
+        return reward
 
     def _reward_tracking_lin_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_lin_vel() - self.rwd_linVelTrackPrev)
@@ -428,7 +555,12 @@ class BipedWF(BaseTask):
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
+        reward = torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
+        if self.cfg.commands.num_commands > 4:
+            jump_cmd = self.commands[:, 4]
+            is_jumping = jump_cmd > 0.05
+            reward[is_jumping] = 1.0
+        return reward
 
     def _reward_tracking_ang_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_ang_vel() - self.rwd_angVelTrackPrev)
@@ -438,4 +570,9 @@ class BipedWF(BaseTask):
     def _reward_base_height(self):
         # Penalize base height away from target
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
-        return torch.abs(base_height - self.cfg.rewards.base_height_target)
+        reward = torch.abs(base_height - self.cfg.rewards.base_height_target)
+        if self.cfg.commands.num_commands > 4:
+            jump_cmd = self.commands[:, 4]
+            is_jumping = jump_cmd > 0.05
+            reward[is_jumping] = 0.0
+        return reward

@@ -47,6 +47,16 @@ import torch
 import matplotlib.pyplot as plt
 
 
+def plot_wheel_heights(state_log, dt):
+    time = np.linspace(0, len(state_log["wheel_height_L"]) * dt, len(state_log["wheel_height_L"]))
+    fig, ax = plt.subplots()
+    ax.plot(time, state_log["wheel_height_L"], label="Left Wheel")
+    ax.plot(time, state_log["wheel_height_R"], label="Right Wheel")
+    ax.set(xlabel="time [s]", ylabel="Height [m]", title="Wheel Heights")
+    ax.legend()
+    # plt.show()
+
+
 def play(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -74,9 +84,18 @@ def play(args):
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     # get robot_type
-    robot_type = os.getenv("ROBOT_TYPE")
-    commands_val = to_torch([0.5, 0.0, 0, 0], device=env.device) if robot_type.startswith("PF")\
-        else to_torch([1.0, 0.0, 0.0], device=env.device) if robot_type == "WF_TRON1A" else to_torch([1.5, 0.0, 0.0, 0.0, 0.0])
+    robot_type = os.getenv("ROBOT_TYPE", "")
+    commands_val = torch.zeros(env.cfg.commands.num_commands, device=env.device)
+    
+    if robot_type.startswith("PF"):
+        commands_val[0] = 0.5
+    elif robot_type == "WF_TRON1A":
+        commands_val[0] = 1.0
+    else:
+        commands_val[0] = 1.5
+    
+    # commands_val = to_torch([0.5, 0.0, 0, 0], device=env.device) if robot_type.startswith("PF")\
+    #     else to_torch([1.0, 0.0, 0.0], device=env.device) if robot_type == "WF_TRON1A" else to_torch([1.5, 0.0, 0.0, 0.0, 0.0])
     action_scale = env.cfg.control.action_scale_pos if robot_type == "WF_TRON1A"\
         else env.cfg.control.action_scale
     obs, obs_history, commands, _ = env.get_observations()
@@ -120,7 +139,7 @@ def play(args):
     logger = Logger(env.dt)
     robot_index = 5  # which robot is used for logging
     joint_index = 1  # which joint is used for logging
-    stop_state_log = 100  # number of steps before plotting states
+    stop_state_log = 300  # number of steps before plotting states
     stop_rew_log = (
         env.max_episode_length + 1
     )  # number of steps before print average episode rewards
@@ -130,6 +149,13 @@ def play(args):
     img_idx = 0
     est = None
     for i in range(10 * int(env.max_episode_length)):
+        # Trigger jump every 200 steps for 10 steps
+        if env.cfg.commands.num_commands > 4:
+            if i % 200 >= 100 and i % 200 < 110:
+                commands_val[4] = 0.3  # Set jump height
+            else:
+                commands_val[4] = 0.0
+
         est = encoder(obs_history)
         actions = policy(torch.cat((est, obs, commands), dim=-1).detach())
 
@@ -182,6 +208,8 @@ def play(args):
                     ]
                     .cpu()
                     .numpy(),
+                    "wheel_height_L": env.foot_positions[robot_index, 0, 2].item(),
+                    "wheel_height_R": env.foot_positions[robot_index, 1, 2].item(),
                 }
             )
             # print(torch.sum(env.power[robot_index, :]).item())
@@ -197,6 +225,7 @@ def play(args):
                     }
                 )
         elif i == stop_state_log:
+            plot_wheel_heights(logger.state_log, env.dt)
             logger.plot_states()
 
         if 0 < i < stop_rew_log:
