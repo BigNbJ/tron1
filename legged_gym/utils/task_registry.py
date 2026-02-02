@@ -93,9 +93,17 @@ class TaskRegistry:
         with open(file, "w") as json_file:
             json_file.write(json_str)
 
+        robot_type = os.getenv("ROBOT_TYPE", "")
+        env_name = name
+        if robot_type.startswith("WF"):
+            env_name = "wheelfoot_flat"
+        elif robot_type.startswith("SF"):
+            env_name = "solefoot_flat"
+        elif robot_type.startswith("PF"):
+            env_name = "pointfoot_flat"
         save_items = [
-            os.path.join(LEGGED_GYM_ENVS_DIR + "/{}/".format(name) + "{}.py".format(name)),
-            os.path.join(LEGGED_GYM_ENVS_DIR + "/{}/".format(name) + "{}_config.py".format(name))
+            os.path.join(LEGGED_GYM_ENVS_DIR + "/{}/".format(env_name) + "{}.py".format(env_name)),
+            os.path.join(LEGGED_GYM_ENVS_DIR + "/{}/".format(env_name) + "{}_config.py".format(env_name))
         ]
         if save_items is not None:
             for save_item in save_items:

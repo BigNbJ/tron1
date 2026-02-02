@@ -173,8 +173,8 @@ class BipedWF(BaseTask):
 
     def compute_group_observations(self):
         # note that observation noise need to modified accordingly !!!
-        # dof_list = [0,1,2,4,5,6]
-        dof_pos = (self.dof_pos - self.default_dof_pos) #[:,dof_list]
+        dof_list = [0,1,2,4,5,6]
+        dof_pos = (self.dof_pos - self.default_dof_pos)[:,dof_list]
         # dof_pos = torch.remainder(dof_pos + self.pi, 2 * self.pi) - self.pi
 
         obs_buf = torch.cat(
@@ -290,7 +290,7 @@ class BipedWF(BaseTask):
             self.commands[env_ids, 4] = 0.0
             
             # 20% chance to jump
-            jump_prob = 0.2
+            jump_prob = 0.3
             jump_mask = torch.rand(len(env_ids), device=self.device) < jump_prob
             jump_indices = env_ids[jump_mask]
             
@@ -424,9 +424,10 @@ class BipedWF(BaseTask):
         return reward
 
     def _get_wheel_contacts(self):
-        # Heuristic: foot height < 0.05 (wheel radius approx)
-        # Assuming flat ground at z=0
-        return self.foot_positions[:, :, 2] < 0.15
+        contact_forces = torch.norm(
+            self.contact_forces[:, self.feet_indices, :], dim=-1
+        )
+        return contact_forces > 1.0
 
     def _reward_jump(self):
         # Heuristic based jump reward
@@ -470,24 +471,52 @@ class BipedWF(BaseTask):
         return reward
 
     def _reward_leg_retraction(self):
-        jump_cmd = self.commands[:, 4]
+        # 1) 判定跳跃与阶段
+        if self.cfg.commands.num_commands <= 4:
+            # 没有jump维度，就只维持nominal
+            jump_cmd = torch.zeros(self.num_envs, device=self.device)
+        else:
+            jump_cmd = self.commands[:, 4]
+
         is_jumping = jump_cmd > 0.05
-        
-        if not torch.any(is_jumping):
-            return torch.zeros(self.num_envs, device=self.device)
-            
+
         contacts = self._get_wheel_contacts()
         in_air = torch.all(~contacts, dim=1)
-        
-        foot_z_rel = self.foot_positions[:, :, 2] - self.base_position[:, 2].unsqueeze(1)
-        
-        # Target retraction: feet should be close to body vertically (e.g. -0.3m)
-        target_retraction = -0.3
-        error = foot_z_rel - target_retraction
-        reward = torch.sum(torch.exp(-torch.square(error) / 0.05), dim=1) / self.foot_positions.shape[1]
-        
-        reward[~(is_jumping & in_air)] = 0.0
+        on_ground = torch.any(contacts, dim=1)
+        air_ratio = (~contacts).float().mean(dim=1)
+
+        foot_positions_base = self.foot_positions - (self.base_position).unsqueeze(1).repeat(1, len(self.feet_indices), 1)
+        for i in range(len(self.feet_indices)):
+            foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :])
+        foot_z_rel = foot_positions_base[:, :, 2]
+
+        target_nominal = -0.6
+        target_extend = -0.8
+        target_retract = -0.45
+
+        target = torch.full((self.num_envs,), target_nominal, device=self.device)
+
+        # 收到jump且还在地面（准备/起跳）：伸长腿
+        target[is_jumping & on_ground] = target_extend
+
+        # 收到jump且在空中：缩短腿
+        target[is_jumping & in_air] = target_retract
+
+        err = foot_z_rel - target.unsqueeze(1)
+        per_foot_reward = torch.exp(-torch.square(err) / self.cfg.rewards.leg_retraction_tracking_sigma)
+        reward = per_foot_reward.min(dim=1).values
+
+        vel_cmd_norm = torch.norm(self.commands[:, :3], dim=1)
+        vel_weight = torch.exp(-(vel_cmd_norm ** 2) / self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
+        # vel_weight = 1
+        stage_weight = torch.where(
+            is_jumping,
+            torch.where(in_air, air_ratio, 1.0 - air_ratio),
+            torch.ones_like(air_ratio),
+        )
+        reward = reward * vel_weight * stage_weight
         return reward
+
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
