@@ -290,7 +290,7 @@ class BipedWF(BaseTask):
             self.commands[env_ids, 4] = 0.0
             
             # 20% chance to jump
-            jump_prob = 0.3
+            jump_prob = 0.0
             jump_mask = torch.rand(len(env_ids), device=self.device) < jump_prob
             jump_indices = env_ids[jump_mask]
             

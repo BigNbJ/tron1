@@ -129,13 +129,13 @@ class Terrain:
             vertical_scale=self.cfg.vertical_scale,
             horizontal_scale=self.cfg.horizontal_scale,
         )
-        slope = difficulty * 0.5
-        random_height = 0.05 + difficulty * 0.15
-        default_step_width = 0.37  # 28cm
+        slope = difficulty * 0.25
+        random_height = 0.05 + difficulty * 0.015
+        default_step_width = 0.45  # 28cm
         max_step_height = 0.3
-        step_height = 0.05 + difficulty * 0.23
+        step_height = 0.05 + difficulty * 0.015
         step_slope = step_height / default_step_width
-        discrete_obstacles_height = 0.05 + difficulty * 0.25
+        discrete_obstacles_height = 0.05 + difficulty * 0.015
         stepping_stones_size = 1.5 * (1.05 - difficulty)
         stone_distance = 0.05 if difficulty == 0 else 0.1
         gap_size = 1.0 * difficulty

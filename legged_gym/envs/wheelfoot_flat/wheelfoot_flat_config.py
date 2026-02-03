@@ -45,7 +45,7 @@ class BipedCfgWF(BaseConfig):
         fail_to_terminal_time_s = 0.5
 
     class terrain:
-        mesh_type = "plane"  # "heightfield" # none, plane, heightfield or trimesh
+        mesh_type = "trimesh"  # "heightfield" # none, plane, heightfield or trimesh
         horizontal_scale = 0.1  # [m]
         vertical_scale = 0.005  # [m]
         border_size = 25  # [m]
@@ -74,13 +74,13 @@ class BipedCfgWF(BaseConfig):
         measured_points_y = [-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4]
         selected = False  # select a unique terrain type and pass all arguments
         terrain_kwargs = None  # Dict of arguments for selected terrain
-        max_init_terrain_level = 5 + 4  # starting curriculum state
+        max_init_terrain_level = 3  # starting curriculum state
         terrain_length = 8.0
         terrain_width = 8.0
         num_rows = 10  # number of terrain rows (levels)
         num_cols = 20  # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
+        terrain_proportions = [0.4, 0.4, 0.0, 0.0, 0.2]
         # trimesh only:
         slope_treshold = (
             0.75  # slopes above this threshold will be corrected to vertical surfaces
@@ -100,7 +100,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-5.0, 5.0]  # min max [m/s]
+            lin_vel_x = [-2.0, 2.0]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -231,7 +231,7 @@ class BipedCfgWF(BaseConfig):
             keep_balance = 1.0
 
             # tracking related rewards
-            tracking_lin_vel = 6.0
+            tracking_lin_vel = 60.0
             tracking_ang_vel = 2.0
             tracking_lin_vel_pb = 1.0
             tracking_ang_vel_pb = 0.2
@@ -240,16 +240,16 @@ class BipedCfgWF(BaseConfig):
             nominal_foot_position = 0.0 # 保持腿长项，由_reward_leg_retraction奖励项替代
             leg_symmetry = 0.5
             same_foot_x_position = -50 # 0.5
-            same_foot_z_position = -100
-            lin_vel_z = -0.3
-            ang_vel_xy = -0.3
+            same_foot_z_position = -50
+            lin_vel_z = -0.1
+            ang_vel_xy = -0.6
             torques = -0.0001
             dof_acc = -1.5e-7
             action_rate = -0.01
             dof_pos_limits = -2.0
             collision = -50
             action_smooth = -0.03
-            orientation = -12.0
+            orientation = -20.0
             feet_distance = -100
             base_height = -15
 

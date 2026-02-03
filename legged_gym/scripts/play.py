@@ -65,7 +65,7 @@ def play(args):
 
     env_cfg.terrain.num_rows = 10
     env_cfg.terrain.num_cols = 20
-    env_cfg.terrain.terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
+    env_cfg.terrain.terrain_proportions = [0.4, 0.4, 0.0, 0.0, 0.2]
     env_cfg.terrain.max_init_terrain_level = 4
     env_cfg.terrain.curriculum = True
     env_cfg.noise.add_noise = True
@@ -90,7 +90,7 @@ def play(args):
     if robot_type.startswith("PF"):
         commands_val[0] = 0.5
     elif robot_type == "WF_TRON1A":
-        commands_val[0] = 3.0
+        commands_val[0] = 1.0
     else:
         commands_val[0] = 1.5
     
@@ -150,11 +150,11 @@ def play(args):
     est = None
     for i in range(10 * int(env.max_episode_length)):
         # Trigger jump every 200 steps for 10 steps
-        if env.cfg.commands.num_commands > 4:
-            if i % 200 >= 100 and i % 200 < 110:
-                commands_val[4] = 0.3  # Set jump height
-            else:
-                commands_val[4] = 0.0
+        # if env.cfg.commands.num_commands > 4:
+        #     if i % 200 >= 100 and i % 200 < 110:
+        #         commands_val[4] = 0.3  # Set jump height
+        #     else:
+        #         commands_val[4] = 0.0
 
         est = encoder(obs_history)
         actions = policy(torch.cat((est, obs, commands), dim=-1).detach())
