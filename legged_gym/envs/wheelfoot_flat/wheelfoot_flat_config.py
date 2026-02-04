@@ -34,8 +34,9 @@ class BipedCfgWF(BaseConfig):
     class env:
         num_envs = 8192
         num_observations = 28 # + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
-        num_critic_observations = 3 + num_observations
         num_height_samples = 117
+        num_critic_observations = 3 + num_observations + num_height_samples
+        # num_critic_observations = 3 + num_observations
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
@@ -100,7 +101,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-2.0, 2.0]  # min max [m/s]
+            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -231,7 +232,7 @@ class BipedCfgWF(BaseConfig):
             keep_balance = 1.0
 
             # tracking related rewards
-            tracking_lin_vel = 60.0
+            tracking_lin_vel = 35.0
             tracking_ang_vel = 2.0
             tracking_lin_vel_pb = 1.0
             tracking_ang_vel_pb = 0.2
@@ -249,14 +250,14 @@ class BipedCfgWF(BaseConfig):
             dof_pos_limits = -2.0
             collision = -50
             action_smooth = -0.03
-            orientation = -20.0
+            orientation = -40.0
             feet_distance = -100
             base_height = -15
 
             # Jump rewards
             jump = 10.0
             jump_height_tracking = 15.0
-            leg_retraction = 10.0
+            leg_retraction = 20.0
 
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)

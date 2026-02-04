@@ -150,11 +150,11 @@ def play(args):
     est = None
     for i in range(10 * int(env.max_episode_length)):
         # Trigger jump every 200 steps for 10 steps
-        # if env.cfg.commands.num_commands > 4:
-        #     if i % 200 >= 100 and i % 200 < 110:
-        #         commands_val[4] = 0.3  # Set jump height
-        #     else:
-        #         commands_val[4] = 0.0
+        if env.cfg.commands.num_commands > 4:
+            if i % 200 >= 100 and i % 200 < 110:
+                commands_val[4] = 0.3  # Set jump height
+            else:
+                commands_val[4] = 0.0
 
         est = encoder(obs_history)
         actions = policy(torch.cat((est, obs, commands), dim=-1).detach())

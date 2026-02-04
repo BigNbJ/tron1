@@ -191,7 +191,10 @@ class BipedWF(BaseTask):
             dim=-1,
         )
         critic_obs_buf = torch.cat((
-            self.base_lin_vel * self.obs_scales.lin_vel, self.obs_buf), dim=-1)
+            self.base_lin_vel * self.obs_scales.lin_vel,
+            self.obs_buf,
+            (self.measured_heights - self.root_states[:, 2].unsqueeze(1)) * self.obs_scales.height_measurements,
+        ), dim=-1)
         return obs_buf, critic_obs_buf
     
     def _post_physics_step_callback(self):
@@ -288,10 +291,24 @@ class BipedWF(BaseTask):
         if self.cfg.commands.num_commands > 4:
             # Default to 0
             self.commands[env_ids, 4] = 0.0
+
+            # Get terrain info to restrict jumping to smooth slopes
+            is_smooth_slope = torch.ones(len(env_ids), dtype=torch.bool, device=self.device)
+            if hasattr(self, "terrain_types"):
+                terrain_col_indices = self.terrain_types[env_ids]
+                terrain_proportions = torch.tensor(
+                    self.cfg.terrain.terrain_proportions, device=self.device
+                )
+                terrain_thresholds = torch.cumsum(terrain_proportions, dim=0)
+                normalized_indices = (
+                    terrain_col_indices.float() + 0.001
+                ) / self.cfg.terrain.num_cols
+                # Smooth slope is the first category
+                is_smooth_slope = normalized_indices < terrain_thresholds[0]
             
-            # 20% chance to jump
-            jump_prob = 0.0
-            jump_mask = torch.rand(len(env_ids), device=self.device) < jump_prob
+            # 20% chance to jump, ONLY on smooth slopes
+            jump_prob = 0.2
+            jump_mask = (torch.rand(len(env_ids), device=self.device) < jump_prob) & is_smooth_slope
             jump_indices = env_ids[jump_mask]
             
             if len(jump_indices) > 0:
@@ -341,6 +358,9 @@ class BipedWF(BaseTask):
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
         
+        if self.cfg.terrain.measure_heights or self.cfg.terrain.critic_measure_heights:
+            self.measured_heights = torch.zeros(self.num_envs, self.cfg.env.num_height_samples, device=self.device, requires_grad=False)
+
         # Update commands_scale to match num_commands
         if self.cfg.commands.num_commands > 3:
             # Re-create commands_scale with appropriate size
