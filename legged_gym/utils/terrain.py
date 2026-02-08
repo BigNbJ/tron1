@@ -133,7 +133,7 @@ class Terrain:
         random_height = 0.05 + difficulty * 0.1
         default_step_width = 0.45  # 28cm
         max_step_height = 0.3
-        step_height =  difficulty * 0.05
+        step_height =  difficulty * 0.15
         step_slope = step_height / default_step_width
         discrete_obstacles_height = 0.05 + difficulty * 0.1
         stepping_stones_size = 1.5 * (1.05 - difficulty)
