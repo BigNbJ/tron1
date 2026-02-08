@@ -81,13 +81,14 @@ class BipedCfgWF(BaseConfig):
         num_rows = 10  # number of terrain rows (levels)
         num_cols = 20  # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        terrain_proportions = [0.0, 0.0, 0.5, 0.5, 0.0]
+        terrain_proportions = [0.2, 0.0, 0.4, 0.4, 0.0]
         # trimesh only:
         slope_treshold = (
             0.75  # slopes above this threshold will be corrected to vertical surfaces
         )
 
     class commands:
+        USE_JUMP = False
         curriculum = False
         smooth_max_lin_vel_x = 2.0
         smooth_max_lin_vel_y = 1.0
@@ -251,7 +252,7 @@ class BipedCfgWF(BaseConfig):
 
             # -------- Style Rewards (Table II) --------
             nominal_foot_position = 1.0
-            default_pose = -1.0
+            default_pose = -1.5
             feet_distance = -10.0      # Image says -10.0, code was -100
             wheel_zero_velocity = 0.5
             same_foot_x_position = -2.0

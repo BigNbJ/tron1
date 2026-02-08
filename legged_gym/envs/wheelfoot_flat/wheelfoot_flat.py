@@ -113,7 +113,7 @@ class BipedWF(BaseTask):
         # --- [NEW] Contact Trigger & Feedforward Logic ---
 
         # 1. 检测触发
-        trigger_mask = self.check_contact_trigger(trigger_threshold=30.0) 
+        trigger_mask = self.check_contact_trigger(trigger_threshold=20.0) 
         
         # 2. 计算前馈 (使用修改后的函数)
         ff_actions = self._compute_feedforward_action(trigger_mask)
@@ -330,7 +330,7 @@ class BipedWF(BaseTask):
             self.commands[env_ids[zero_cmd_env_idx_], 3] = heading
             
         # Jump command sampling
-        if self.cfg.commands.num_commands > 4:
+        if self.cfg.commands.USE_JUMP:
             # Default to 0
             self.commands[env_ids, 4] = 0.0
 
