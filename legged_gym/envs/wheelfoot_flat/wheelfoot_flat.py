@@ -268,6 +268,22 @@ class BipedWF(BaseTask):
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
         )
 
+        # === 新增：专门负责更新 feet_air_time 状态 ===
+        # 1. 获取接触状态 (建议使用论文提到的滑动窗口滤波后的接触)
+        contact = self._get_wheel_contacts() 
+        
+        # 2. 捕捉“刚落地”瞬间用于给奖励 (存入 buffer 供奖励函数读取)
+        #    逻辑：如果在空中(time>0) 且 现在接触了 => 刚落地
+        self.first_contact = (self.feet_air_time > 0.) & contact
+        
+        # 3. 记录“本帧结算的滞空时间”供奖励函数使用
+        #    (必须在重置前记录，否则奖励函数读到的都是0)
+        self.last_air_time = self.feet_air_time.clone()
+        
+        # 4. 更新计时器 (状态转移)
+        self.feet_air_time += self.dt
+        self.feet_air_time[contact] = 0. # 接触时清零
+
     def _resample_commands(self, env_ids):
         """Randommly select commands of some environments
 
@@ -417,7 +433,7 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.6  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 1.0         # 权重
+        self.k_ff = 2.0         # 权重 TODO 1.0->2.0
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
@@ -806,51 +822,40 @@ class BipedWF(BaseTask):
     def _reward_feet_clearance(self):
         """
         [Paper] Feet clearance: Encourages swing foot to be within [h_min, h_max].
-        Critical for blind stair climbing.
+        Only active when the robot is INTENDED to swing (Triggered).
         """
-        # 获取足端高度 (相对于基座或地面，论文通常指相对于地面)
-        # 假设 foot_positions 是世界坐标，需要减去地形高度
-        # 这里简化使用相对于 base 的高度做演示，或者你如果有测得的地形高度更好
-        # 论文建议范围: 10cm < h < 20cm
-        
         target_height_min = 0.10 
         target_height_max = 0.20
         
-        # 判断摆动腿 (Swing leg): 接触力 < 1.0 为摆动
-        contact = self._get_wheel_contacts()
-        is_swing = ~contact
+        # 1. 关键修改：使用“期望状态”而非“物理状态”
+        # 只有在触发了前馈轨迹（ff_timers >= 0）时，才要求通过 Feet Clearance 奖励来引导抬腿高度
+        # 如果平时(timer < 0)抬腿，不给这个奖励，防止它为了刷分而在平地乱抬腿
+        is_commanded_swing = (self.ff_timers >= 0)
         
+        # 2. 计算相对地形的足端高度
+        foot_heights = self._get_foot_heights() # 地形高度
+        # foot_positions[:, :, 2] 是足端的世界 Z 坐标
+        foot_z = self.foot_positions[:, :, 2] - foot_heights - self.cfg.asset.foot_radius
         
-        # Use _get_foot_heights() to get terrain height at foot positions
-        # self.measured_heights is (num_envs, num_samples), which causes shape mismatch if used directly
-        foot_heights = self._get_foot_heights()
-        foot_z = self.foot_positions[:, :, 2] - foot_heights
-        
-        # 奖励计算: 只有在摆动相且高度在范围内才给分
+        # 3. 判定高度是否在区间内
         in_range = (foot_z > target_height_min) & (foot_z < target_height_max)
-        reward = torch.sum(is_swing.float() * in_range.float(), dim=1)
+        
+        # 4. 计算奖励
+        # 只有在【应该摆动】且【高度达标】时才给分
+        reward = torch.sum(is_commanded_swing.float() * in_range.float(), dim=1)
+        
         return reward
 
     def _reward_feet_air_time(self):
         """
         [Paper] Feet air time: Encourages longer steps.
-        Rewrd is given when the foot first touches the ground after a swing phase.
+        Reward is given when the foot first touches the ground after a swing phase.
         """
-        # 注意：这需要你在 step() 或 post_physics_step() 中维护 self.feet_air_time 变量
-        # 假设你已经在 update_feet_air_time 中更新了它
-        # 这是一个稀疏奖励，只有落地瞬间有
-        
-        contact = self._get_wheel_contacts()
-        # 这一帧接触，上一帧没接触 => 刚落地 (First contact)
-        # 假设 self.last_contacts 存在
-        first_contact = (self.feet_air_time > 0.) & contact
-        
-        rew_airTime = torch.sum(torch.clamp(self.feet_air_time, max = 0.5) * first_contact.float(), dim=1)
-
-        self.feet_air_time += self.dt
-
-        # 落地后重置 air_time
-        self.feet_air_time[contact] = 0.
+        # 直接读取我们在 post_physics_step 里算好的“结算时间”和“落地标记”
+        rew_airTime = torch.sum(
+            torch.clamp(self.last_air_time, max=0.5) * self.first_contact.float(), 
+            dim=1
+        )
         
         return rew_airTime
 

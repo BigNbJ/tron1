@@ -64,8 +64,10 @@ class LivePlotter:
         self.force_x_R = deque(maxlen=max_len)
         self.force_y_L = deque(maxlen=max_len)
         self.force_y_R = deque(maxlen=max_len)
-        self.force_z_L = deque(maxlen=max_len)
-        self.force_z_R = deque(maxlen=max_len)
+
+        # Heights
+        self.base_height = deque(maxlen=max_len)
+        self.measured_heights = deque(maxlen=max_len)
         
         # Trigger
         self.trigger_L = deque(maxlen=max_len)
@@ -83,12 +85,24 @@ class LivePlotter:
         self.ff_knee_L = deque(maxlen=max_len)
         self.ff_knee_R = deque(maxlen=max_len)
         
+        # Actions (Fused)
+        self.fused_hip_L = deque(maxlen=max_len)
+        self.fused_hip_R = deque(maxlen=max_len)
+        self.fused_knee_L = deque(maxlen=max_len)
+        self.fused_knee_R = deque(maxlen=max_len)
+        
+        # Joint Positions
+        self.hip_pos_L = deque(maxlen=max_len)
+        self.hip_pos_R = deque(maxlen=max_len)
+        self.knee_pos_L = deque(maxlen=max_len)
+        self.knee_pos_R = deque(maxlen=max_len)
+        
         # Initialize time
         self.current_time = 0.0
         
-        # Setup plot: 2 Cols x 3 Rows
+        # Setup plot: 2 Cols x 4 Rows
         plt.ion()
-        self.fig, self.axs = plt.subplots(3, 2, sharex=True, figsize=(14, 10))
+        self.fig, self.axs = plt.subplots(4, 2, sharex=True, figsize=(14, 12))
         self.fig.canvas.manager.set_window_title('Live Oscilloscope')
         
         # --- Column 1: Contact Forces ---
@@ -108,51 +122,70 @@ class LivePlotter:
         self.ax_fy.legend(loc='upper right', fontsize='small')
         self.ax_fy.grid(True)
         
-        # Row 2: Force Z
+        # Row 2: Heights
         self.ax_fz = self.axs[2, 0]
-        self.line_fz_L, = self.ax_fz.plot([], [], label='Fz L', color='b')
-        self.line_fz_R, = self.ax_fz.plot([], [], label='Fz R', color='r')
-        self.ax_fz.set_ylabel('Force Z [N]')
-        self.ax_fz.set_xlabel('Time [s]')
+        self.line_base_h, = self.ax_fz.plot([], [], label='Base Height', color='b')
+        self.line_measured_h, = self.ax_fz.plot([], [], label='Measured Height', color='r')
+        self.ax_fz.set_ylabel('Height [m]')
         self.ax_fz.legend(loc='upper right', fontsize='small')
         self.ax_fz.grid(True)
         
-        # --- Column 2: Trigger & Actions ---
-        # Row 0: Trigger
-        self.ax_trig = self.axs[0, 1]
+        # Row 3: Trigger
+        self.ax_trig = self.axs[3, 0]
         self.line_trig_L, = self.ax_trig.plot([], [], label='Trigger L', color='b', alpha=0.7)
         self.line_trig_R, = self.ax_trig.plot([], [], label='Trigger R', color='r', alpha=0.7)
         self.ax_trig.set_ylabel('Trigger')
+        self.ax_trig.set_xlabel('Time [s]')
         self.ax_trig.set_ylim(-0.1, 1.1)
         self.ax_trig.legend(loc='upper right', fontsize='small')
         self.ax_trig.grid(True)
         
-        # Row 1: Hip Actions
-        self.ax_hip = self.axs[1, 1]
-        self.line_pol_hip_L, = self.ax_hip.plot([], [], label='Pol Hip L', color='b', linestyle='--')
-        self.line_pol_hip_R, = self.ax_hip.plot([], [], label='Pol Hip R', color='r', linestyle='--')
-        self.line_ff_hip_L, = self.ax_hip.plot([], [], label='FF Hip L', color='b')
-        self.line_ff_hip_R, = self.ax_hip.plot([], [], label='FF Hip R', color='r')
-        self.ax_hip.set_ylabel('Hip Action [rad]')
-        self.ax_hip.legend(loc='upper right', fontsize='small', ncol=2)
-        self.ax_hip.grid(True)
+        # --- Column 2: Actions ---
+        self.ax_hip_L = self.axs[0, 1]
+        self.line_pol_hip_L, = self.ax_hip_L.plot([], [], label='Pol Hip L', color='#1f77b4', linestyle='-')
+        self.line_ff_hip_L, = self.ax_hip_L.plot([], [], label='FF Hip L', color='#ff7f0e', linestyle='--')
+        self.line_fused_hip_L, = self.ax_hip_L.plot([], [], label='Fused Hip L', color='#9467bd', linestyle='-.')
+        self.line_hip_pos_L, = self.ax_hip_L.plot([], [], label='Hip Pos L', color='#2ca02c', linestyle=':')
+        self.ax_hip_L.set_ylabel('Hip L [rad]')
+        self.ax_hip_L.legend(loc='upper right', fontsize='small')
+        self.ax_hip_L.grid(True)
 
-        # Row 2: Knee Actions
-        self.ax_knee = self.axs[2, 1]
-        self.line_pol_knee_L, = self.ax_knee.plot([], [], label='Pol Knee L', color='b', linestyle='--')
-        self.line_pol_knee_R, = self.ax_knee.plot([], [], label='Pol Knee R', color='r', linestyle='--')
-        self.line_ff_knee_L, = self.ax_knee.plot([], [], label='FF Knee L', color='b')
-        self.line_ff_knee_R, = self.ax_knee.plot([], [], label='FF Knee R', color='r')
-        self.ax_knee.set_ylabel('Knee Action [rad]')
-        self.ax_knee.set_xlabel('Time [s]')
-        self.ax_knee.legend(loc='upper right', fontsize='small', ncol=2)
-        self.ax_knee.grid(True)
+        self.ax_hip_R = self.axs[1, 1]
+        self.line_pol_hip_R, = self.ax_hip_R.plot([], [], label='Pol Hip R', color='#1f77b4', linestyle='-')
+        self.line_ff_hip_R, = self.ax_hip_R.plot([], [], label='FF Hip R', color='#ff7f0e', linestyle='--')
+        self.line_fused_hip_R, = self.ax_hip_R.plot([], [], label='Fused Hip R', color='#9467bd', linestyle='-.')
+        self.line_hip_pos_R, = self.ax_hip_R.plot([], [], label='Hip Pos R', color='#2ca02c', linestyle=':')
+        self.ax_hip_R.set_ylabel('Hip R [rad]')
+        self.ax_hip_R.legend(loc='upper right', fontsize='small')
+        self.ax_hip_R.grid(True)
+
+        self.ax_knee_L = self.axs[2, 1]
+        self.line_pol_knee_L, = self.ax_knee_L.plot([], [], label='Pol Knee L', color='#1f77b4', linestyle='-')
+        self.line_ff_knee_L, = self.ax_knee_L.plot([], [], label='FF Knee L', color='#ff7f0e', linestyle='--')
+        self.line_fused_knee_L, = self.ax_knee_L.plot([], [], label='Fused Knee L', color='#9467bd', linestyle='-.')
+        self.line_knee_pos_L, = self.ax_knee_L.plot([], [], label='Knee Pos L', color='#2ca02c', linestyle=':')
+        self.ax_knee_L.set_ylabel('Knee L [rad]')
+        self.ax_knee_L.legend(loc='upper right', fontsize='small')
+        self.ax_knee_L.grid(True)
+
+        self.ax_knee_R = self.axs[3, 1]
+        self.line_pol_knee_R, = self.ax_knee_R.plot([], [], label='Pol Knee R', color='#1f77b4', linestyle='-')
+        self.line_ff_knee_R, = self.ax_knee_R.plot([], [], label='FF Knee R', color='#ff7f0e', linestyle='--')
+        self.line_fused_knee_R, = self.ax_knee_R.plot([], [], label='Fused Knee R', color='#9467bd', linestyle='-.')
+        self.line_knee_pos_R, = self.ax_knee_R.plot([], [], label='Knee Pos R', color='#2ca02c', linestyle=':')
+        self.ax_knee_R.set_ylabel('Knee R [rad]')
+        self.ax_knee_R.set_xlabel('Time [s]')
+        self.ax_knee_R.legend(loc='upper right', fontsize='small')
+        self.ax_knee_R.grid(True)
         
     def update(self, 
-               force_x_l, force_x_r, force_y_l, force_y_r, force_z_l, force_z_r,
+               force_x_l, force_x_r, force_y_l, force_y_r,
+               base_height, measured_height,
                trigger_l, trigger_r, 
                pol_hip_l, pol_hip_r, pol_knee_l, pol_knee_r,
-               ff_hip_l, ff_hip_r, ff_knee_l, ff_knee_r):
+               ff_hip_l, ff_hip_r, ff_knee_l, ff_knee_r,
+               fused_hip_l, fused_hip_r, fused_knee_l, fused_knee_r,
+               hip_pos_l, hip_pos_r, knee_pos_l, knee_pos_r):
         self.current_time += self.dt
         
         self.time_buf.append(self.current_time)
@@ -162,8 +195,10 @@ class LivePlotter:
         self.force_x_R.append(force_x_r)
         self.force_y_L.append(force_y_l)
         self.force_y_R.append(force_y_r)
-        self.force_z_L.append(force_z_l)
-        self.force_z_R.append(force_z_r)
+
+        # Heights
+        self.base_height.append(base_height)
+        self.measured_heights.append(measured_height)
         
         # Trigger
         self.trigger_L.append(trigger_l)
@@ -180,6 +215,16 @@ class LivePlotter:
         self.ff_hip_R.append(ff_hip_r * s)
         self.ff_knee_L.append(ff_knee_l * s)
         self.ff_knee_R.append(ff_knee_r * s)
+
+        self.fused_hip_L.append(fused_hip_l * s)
+        self.fused_hip_R.append(fused_hip_r * s)
+        self.fused_knee_L.append(fused_knee_l * s)
+        self.fused_knee_R.append(fused_knee_r * s)
+
+        self.hip_pos_L.append(hip_pos_l)
+        self.hip_pos_R.append(hip_pos_r)
+        self.knee_pos_L.append(knee_pos_l)
+        self.knee_pos_R.append(knee_pos_r)
         
         self.counter += 1
         if self.counter % self.refresh_rate == 0:
@@ -193,8 +238,10 @@ class LivePlotter:
         self.line_fx_R.set_data(t, list(self.force_x_R))
         self.line_fy_L.set_data(t, list(self.force_y_L))
         self.line_fy_R.set_data(t, list(self.force_y_R))
-        self.line_fz_L.set_data(t, list(self.force_z_L))
-        self.line_fz_R.set_data(t, list(self.force_z_R))
+
+        # Heights
+        self.line_base_h.set_data(t, list(self.base_height))
+        self.line_measured_h.set_data(t, list(self.measured_heights))
         
         # Trigger
         self.line_trig_L.set_data(t, list(self.trigger_L))
@@ -205,16 +252,23 @@ class LivePlotter:
         self.line_pol_hip_R.set_data(t, list(self.pol_hip_R))
         self.line_ff_hip_L.set_data(t, list(self.ff_hip_L))
         self.line_ff_hip_R.set_data(t, list(self.ff_hip_R))
+        self.line_fused_hip_L.set_data(t, list(self.fused_hip_L))
+        self.line_fused_hip_R.set_data(t, list(self.fused_hip_R))
+        self.line_hip_pos_L.set_data(t, list(self.hip_pos_L))
+        self.line_hip_pos_R.set_data(t, list(self.hip_pos_R))
         
         self.line_pol_knee_L.set_data(t, list(self.pol_knee_L))
         self.line_pol_knee_R.set_data(t, list(self.pol_knee_R))
         self.line_ff_knee_L.set_data(t, list(self.ff_knee_L))
         self.line_ff_knee_R.set_data(t, list(self.ff_knee_R))
+        self.line_fused_knee_L.set_data(t, list(self.fused_knee_L))
+        self.line_fused_knee_R.set_data(t, list(self.fused_knee_R))
+        self.line_knee_pos_L.set_data(t, list(self.knee_pos_L))
+        self.line_knee_pos_R.set_data(t, list(self.knee_pos_R))
         
         # Rescale axes
         if len(t) > 0:
-            self.ax_fz.set_xlim(min(t), max(t) + self.dt)
-            # ax_knee shares X, so no need to set it explicitly
+            self.ax_trig.set_xlim(min(t), max(t) + self.dt)
             
             # Auto-scale Forces
             # FX
@@ -231,25 +285,37 @@ class LivePlotter:
                 span = max(1.0, max_v - min_v)
                 self.ax_fy.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
                 
-            # FZ
-            all_fz = list(self.force_z_L) + list(self.force_z_R)
-            if all_fz:
-                min_v, max_v = min(all_fz), max(all_fz)
+            # Height
+            all_h = list(self.base_height) + list(self.measured_heights)
+            if all_h:
+                min_v, max_v = min(all_h), max(all_h)
                 span = max(1.0, max_v - min_v)
                 self.ax_fz.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
 
             # Auto-scale Actions
-            all_hips = list(self.pol_hip_L) + list(self.pol_hip_R) + list(self.ff_hip_L) + list(self.ff_hip_R)
-            if all_hips:
-                min_h, max_h = min(all_hips), max(all_hips)
+            all_hip_l = list(self.pol_hip_L) + list(self.ff_hip_L) + list(self.fused_hip_L) + list(self.hip_pos_L)
+            if all_hip_l:
+                min_h, max_h = min(all_hip_l), max(all_hip_l)
                 span = max(0.1, max_h - min_h)
-                self.ax_hip.set_ylim(min_h - 0.1*span, max_h + 0.1*span)
+                self.ax_hip_L.set_ylim(min_h - 0.1*span, max_h + 0.1*span)
+
+            all_hip_r = list(self.pol_hip_R) + list(self.ff_hip_R) + list(self.fused_hip_R) + list(self.hip_pos_R)
+            if all_hip_r:
+                min_h, max_h = min(all_hip_r), max(all_hip_r)
+                span = max(0.1, max_h - min_h)
+                self.ax_hip_R.set_ylim(min_h - 0.1*span, max_h + 0.1*span)
                 
-            all_knees = list(self.pol_knee_L) + list(self.pol_knee_R) + list(self.ff_knee_L) + list(self.ff_knee_R)
-            if all_knees:
-                min_k, max_k = min(all_knees), max(all_knees)
+            all_knee_l = list(self.pol_knee_L) + list(self.ff_knee_L) + list(self.fused_knee_L) + list(self.knee_pos_L)
+            if all_knee_l:
+                min_k, max_k = min(all_knee_l), max(all_knee_l)
                 span = max(0.1, max_k - min_k)
-                self.ax_knee.set_ylim(min_k - 0.1*span, max_k + 0.1*span)
+                self.ax_knee_L.set_ylim(min_k - 0.1*span, max_k + 0.1*span)
+
+            all_knee_r = list(self.pol_knee_R) + list(self.ff_knee_R) + list(self.fused_knee_R) + list(self.knee_pos_R)
+            if all_knee_r:
+                min_k, max_k = min(all_knee_r), max(all_knee_r)
+                span = max(0.1, max_k - min_k)
+                self.ax_knee_R.set_ylim(min_k - 0.1*span, max_k + 0.1*span)
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -272,6 +338,8 @@ def play(args):
     env_cfg.domain_rand.randomize_restitution = False
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.push_robots = False
+
+    env_cfg.terrain.mesh_type = "heightfield"
 
     if RECORD_VIDEO:
         env_cfg.env.enable_camera_sensors = True
@@ -333,7 +401,7 @@ def play(args):
         )
 
     logger = Logger(env.dt)
-    robot_index = 5  # which robot is used for logging
+    robot_index = 44  # which robot is used for logging
     joint_index = 1  # which joint is used for logging
     stop_state_log = 300  # number of steps before plotting states
     stop_rew_log = (
@@ -385,7 +453,10 @@ def play(args):
                 # Forces (L/R)
                 force_x_l=forces[0, 0].item(), force_x_r=forces[1, 0].item(),
                 force_y_l=forces[0, 1].item(), force_y_r=forces[1, 1].item(),
-                force_z_l=forces[0, 2].item(), force_z_r=forces[1, 2].item(),
+                
+                # Heights
+                base_height=env.base_height[robot_index].item(),
+                measured_height=torch.mean(env.measured_heights[robot_index]).item(),
                 
                 # Trigger
                 trigger_l=infos["trigger_mask"][robot_index, 0].item(),
@@ -399,7 +470,18 @@ def play(args):
                 ff_hip_l=infos["ff_actions"][robot_index, 1].item(),
                 ff_hip_r=infos["ff_actions"][robot_index, 5].item(),
                 ff_knee_l=infos["ff_actions"][robot_index, 2].item(),
-                ff_knee_r=infos["ff_actions"][robot_index, 6].item()
+                ff_knee_r=infos["ff_actions"][robot_index, 6].item(),
+                
+                fused_hip_l=env.actions[robot_index, 1].item(),
+                fused_hip_r=env.actions[robot_index, 5].item(),
+                fused_knee_l=env.actions[robot_index, 2].item(),
+                fused_knee_r=env.actions[robot_index, 6].item(),
+                
+                # Joint Positions
+                hip_pos_l=(env.dof_pos[robot_index, 1] - env.raw_default_dof_pos[1]).item(),
+                hip_pos_r=(env.dof_pos[robot_index, 5] - env.raw_default_dof_pos[5]).item(),
+                knee_pos_l=(env.dof_pos[robot_index, 2] - env.raw_default_dof_pos[2]).item(),
+                knee_pos_r=(env.dof_pos[robot_index, 6] - env.raw_default_dof_pos[6]).item(),
             )
 
         if RECORD_VIDEO and i == 500:

@@ -243,19 +243,19 @@ class BipedCfgWF(BaseConfig):
             tracking_ang_vel_pb = 0.5
             
             # [NEW] Tracking target pos (0.8)
-            tracking_target_pos = 0.8
+            tracking_target_pos = 2.0 # TODO 1.0->2.0
             
             # Gait / Contact related (All 2.0)
-            feet_air_time = 2.0
-            feet_contact_number = 2.0  # Image says 2.0, code was 1.0
-            feet_clearance = 2.0
+            feet_air_time = 4.0 # TODO 2.0->4.0
+            feet_contact_number = 4.0  # Image says 2.0, code was 1.0 # TODO
+            feet_clearance = 4.0 # TODO
 
             # -------- Style Rewards (Table II) --------
             nominal_foot_position = 1.0
-            default_pose = -1.5
+            default_pose = -1.0
             feet_distance = -10.0      # Image says -10.0, code was -100
             wheel_zero_velocity = 0.5
-            same_foot_x_position = -2.0
+            same_foot_x_position = -0.001 # TODO -2.0->-0.01
             base_height = -20.0
             orientation = -12.0        # Image says -12.0, code was -40.0
 
