@@ -35,7 +35,7 @@ class BipedCfgWF(BaseConfig):
         num_envs = 8192
         num_observations = 28 # + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
         num_height_samples = 117
-        num_critic_observations = 3 + num_observations + num_height_samples
+        num_critic_observations = 3 + num_observations + 6
         # num_critic_observations = 3 + num_observations
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes
@@ -75,13 +75,13 @@ class BipedCfgWF(BaseConfig):
         measured_points_y = [-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4]
         selected = False  # select a unique terrain type and pass all arguments
         terrain_kwargs = None  # Dict of arguments for selected terrain
-        max_init_terrain_level = 3  # starting curriculum state
+        max_init_terrain_level = 4  # starting curriculum state
         terrain_length = 8.0
         terrain_width = 8.0
         num_rows = 10  # number of terrain rows (levels)
         num_cols = 20  # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        terrain_proportions = [0.4, 0.4, 0.0, 0.0, 0.2]
+        terrain_proportions = [0.0, 0.0, 0.5, 0.5, 0.0]
         # trimesh only:
         slope_treshold = (
             0.75  # slopes above this threshold will be corrected to vertical surfaces
@@ -101,7 +101,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
+            lin_vel_x = [-2.0, 2.0]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -228,43 +228,73 @@ class BipedCfgWF(BaseConfig):
 
     class rewards:
         class scales:
-            # termination related rewards
-            keep_balance = 1.0
+# -------- Task Rewards (Table II) --------
+            # [Split] Linear velocity tracking (X: 1.2, Y: 1.0)
+            tracking_lin_vel_x = 1.2
+            tracking_lin_vel_y = 1.0
+            
+            # [Split] Linear velocity tracking PB (X: 1.0, Y: 0.8)
+            tracking_lin_vel_x_pb = 1.0
+            tracking_lin_vel_y_pb = 0.8
+            
+            # Angular velocity tracking (1.0)
+            tracking_ang_vel = 1.0
+            tracking_ang_vel_pb = 0.5
+            
+            # [NEW] Tracking target pos (0.8)
+            tracking_target_pos = 0.8
+            
+            # Gait / Contact related (All 2.0)
+            feet_air_time = 2.0
+            feet_contact_number = 2.0  # Image says 2.0, code was 1.0
+            feet_clearance = 2.0
 
-            # tracking related rewards
-            tracking_lin_vel = 35.0
-            tracking_ang_vel = 2.0
-            tracking_lin_vel_pb = 1.0
-            tracking_ang_vel_pb = 0.2
+            # -------- Style Rewards (Table II) --------
+            nominal_foot_position = 1.0
+            default_pose = -1.0
+            feet_distance = -10.0      # Image says -10.0, code was -100
+            wheel_zero_velocity = 0.5
+            same_foot_x_position = -2.0
+            base_height = -20.0
+            orientation = -12.0        # Image says -12.0, code was -40.0
 
-            # regulation related rewards
-            nominal_foot_position = 0.0 # 保持腿长项，由_reward_leg_retraction奖励项替代
-            leg_symmetry = 0.5
-            same_foot_x_position = -50 # 0.5
-            same_foot_z_position = -50
-            lin_vel_z = -0.1
-            ang_vel_xy = -0.6
-            torques = -0.0001
-            dof_acc = -1.5e-7
+            # -------- Regularization Rewards (Table II) --------
+            wheel_spin = -5.0
+            opposite_base_vel = -40.0
+            
+            # [NEW] Opposite wheel vel (-2.0)
+            opposite_wheel_vel = -2.0
+            
+            lin_vel_z = -0.3
+            ang_vel_xy = -0.01         # Image says -0.01, code was -0.6
+            torques = -1.0e-5          # Image says -1e-5, code was -1e-4
+            dof_acc = -2.5e-7          # Image says -2.5e-7
+            
+            # [NEW] Dof vel (-1e-5)
+            dof_vel = -1.0e-5
+            
             action_rate = -0.01
+            action_smooth = -0.005     # Image says -0.005, code was -0.03
+            collision = -50.0
+            feet_contact_forces = -5.0
             dof_pos_limits = -2.0
-            collision = -50
-            action_smooth = -0.03
-            orientation = -40.0
-            feet_distance = -100
-            base_height = -15
 
-            # Jump rewards
-            jump = 10.0
-            jump_height_tracking = 15.0
-            leg_retraction = 20.0
+            # -------- Unused / Non-Paper Rewards (Set to 0) --------
+            tracking_lin_vel = 0.0     # Replaced by split X/Y
+            tracking_lin_vel_pb = 0.0  # Replaced by split X/Y
+            keep_balance = 0.0
+            leg_symmetry = 0.0
+            same_foot_z_position = 0.0
+            jump = 0.0
+            jump_height_tracking = 0.0
+            leg_retraction = 0.0
 
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
         clip_single_reward = 5
-        tracking_sigma = 0.2  # tracking reward = exp(-error^2/sigma)
-        ang_tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
+        tracking_sigma = 0.05  # tracking reward = exp(-error^2/sigma)
+        ang_tracking_sigma = 0.05  # tracking reward = exp(-error^2/sigma)
         nominal_foot_position_tracking_sigma = 0.005
         nominal_foot_position_tracking_sigma_wrt_v = 0.5
         leg_retraction_tracking_sigma = 0.05
@@ -295,7 +325,7 @@ class BipedCfgWF(BaseConfig):
             dof_vel = 0.05
             dof_acc = 0.0025
             height_measurements = 5.0
-            contact_forces = 0.01
+            contact_forces = 0.5
             torque = 0.05
 
         clip_observations = 100.0

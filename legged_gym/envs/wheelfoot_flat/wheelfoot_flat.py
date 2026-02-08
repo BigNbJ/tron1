@@ -10,6 +10,7 @@ from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from typing import Tuple, Dict
 
@@ -78,6 +79,11 @@ class BipedWF(BaseTask):
         self.fail_buf[env_ids] = 0
         self.action_fifo[env_ids] = 0
         self.dof_pos_int[env_ids] = 0
+        
+        # Reset contact force history and feedforward timers
+        self.contact_force_history[env_ids] = 0.0
+        self.ff_timers[env_ids] = -1.0
+
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -103,6 +109,22 @@ class BipedWF(BaseTask):
 
     def step(self, actions):
         self._action_clip(actions)
+
+        # --- [NEW] Contact Trigger & Feedforward Logic ---
+
+        # 1. 检测触发
+        trigger_mask = self.check_contact_trigger(trigger_threshold=30.0) 
+        
+        # 2. 计算前馈 (使用修改后的函数)
+        ff_actions = self._compute_feedforward_action(trigger_mask)
+        
+        self.extras["trigger_mask"] = trigger_mask
+        self.extras["ff_actions"] = ff_actions
+        
+        # 3. 融合
+        self.actions = self.k_pf * actions + self.k_ff * ff_actions
+        # -------------------------------------------------
+
         # step physics and render each frame
         self.render()
         self.pre_physics_step()
@@ -172,6 +194,26 @@ class BipedWF(BaseTask):
         self.wheel_lin_vel = self.foot_velocities[:, 0, :] + self.foot_velocities[:, 1, :]
 
     def compute_group_observations(self):
+        # ---------------------------------------------------------
+        # 1. Update Critic Contact History (Sliding Window)
+        # ---------------------------------------------------------
+        # 获取当前帧的 3D 接触力 (num_envs, 2, 3)
+        current_feet_forces = self.contact_forces[:, self.feet_indices, :]
+        
+        # 更新历史: 丢弃最旧的一帧 (index 0), 拼接最新的一帧
+        # self.critic_contact_history shape: (num_envs, 2, 3, 3)
+        self.critic_contact_history = torch.cat(
+            [self.critic_contact_history[..., 1:], current_feet_forces.unsqueeze(-1)], 
+            dim=-1
+        )
+        
+        # 计算平均值 (Avg contact forces)
+        # mean over the last dim (window size), result shape: (num_envs, 2, 3)
+        avg_contact_forces = torch.mean(self.critic_contact_history, dim=-1)
+        
+        # 展平为 (num_envs, 6)
+        avg_contact_forces_flat = avg_contact_forces.view(self.num_envs, 6)
+
         # note that observation noise need to modified accordingly !!!
         dof_list = [0,1,2,4,5,6]
         dof_pos = (self.dof_pos - self.default_dof_pos)[:,dof_list]
@@ -193,7 +235,7 @@ class BipedWF(BaseTask):
         critic_obs_buf = torch.cat((
             self.base_lin_vel * self.obs_scales.lin_vel,
             self.obs_buf,
-            (self.measured_heights - self.root_states[:, 2].unsqueeze(1)) * self.obs_scales.height_measurements,
+            avg_contact_forces_flat * self.obs_scales.contact_forces,
         ), dim=-1)
         return obs_buf, critic_obs_buf
     
@@ -357,7 +399,32 @@ class BipedWF(BaseTask):
         super()._init_buffers()
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
+        # History buffer for contact trigger mechanism: (num_envs, 2, 3)
+        self.contact_force_history = torch.zeros(self.num_envs, 2, 3, device=self.device, dtype=torch.float)
+        # [NEW] Critic 用的 3D 向量历史 (存 Fx, Fy, Fz)
+        # Shape: (num_envs, 2, 3, 3) -> (环境数, 左右脚, 3维力, 历史长度3)
+        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 3, device=self.device, dtype=torch.float)
         
+        # [NEW] Buffers for Potential-Based (PB) rewards splitting
+        # Used to store previous error for tracking_lin_vel_x_pb and y_pb
+        self.last_lin_vel_error_x = 0.0
+        self.last_lin_vel_error_y = 0.0
+        self.last_ang_vel_error = 0.0
+        
+        # --- [NEW] Feedforward Variables ---
+        self.ff_timers = torch.full((self.num_envs, 2), -1.0, device=self.device, dtype=torch.float)
+        
+        # 参数设置
+        self.ff_duration = 0.6  # 周期 T
+        self.k_pf = 1.0
+        self.k_ff = 1.0         # 权重
+        
+        # 定义幅度 (Magnitudes)，均为正数
+        # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
+        self.ff_amp_hip = 0.5   # 髋关节抬起幅度 (根据需要调整大小)
+        self.ff_amp_knee = 1.0  # 膝关节弯曲幅度 (通常是髋的2倍)
+        # -----------------------------------
+
         if self.cfg.terrain.measure_heights or self.cfg.terrain.critic_measure_heights:
             self.measured_heights = torch.zeros(self.num_envs, self.cfg.env.num_height_samples, device=self.device, requires_grad=False)
 
@@ -386,6 +453,111 @@ class BipedWF(BaseTask):
             self.critic_obs_buf
         )
 
+    def check_contact_trigger(self, trigger_threshold=50.0):
+        """
+        Contact-Triggered Mechanism:
+        1. Calculate horizontal force Fxy.
+        2. Update sliding window (history of length 3).
+        3. Determine stable contact (all 3 frames > threshold).
+        4. Determine trigger mask based on priority.
+        
+        Returns:
+            trigger_mask (torch.Tensor): Shape (num_envs, 2), Boolean mask indicating which leg to trigger.
+        """
+        # 1. Horizontal Force Calculation
+        # self.contact_forces: (num_envs, num_bodies, 3)
+        # self.feet_indices: (2,)
+        feet_contact_forces = self.contact_forces[:, self.feet_indices, :] # (num_envs, 2, 3)
+        f_xy = torch.norm(feet_contact_forces[:, :, :2], dim=-1) # (num_envs, 2)
+
+        # 2. Sliding Window Update
+        # Shift history: remove oldest, add new
+        # self.contact_force_history: (num_envs, 2, 3)
+        self.contact_force_history = torch.cat([self.contact_force_history[:, :, 1:], f_xy.unsqueeze(-1)], dim=-1)
+
+        # 3. Stable Contact Judgment
+        # Check if all 3 frames in history > threshold
+        stable_contact = torch.all(self.contact_force_history > trigger_threshold, dim=-1) # (num_envs, 2)
+
+        # --- [新增] 起步保护逻辑 ---
+        # 设定保护时间，例如 50 步 (假设 dt=0.02s，即 1秒)
+        startup_steps = 50 
+        # 创建掩码：只有 episode 长度大于 startup_steps 的环境才允许触发
+        is_warmed_up = self.episode_length_buf > startup_steps
+        
+        # 将掩码应用到 stable_contact 上 (广播机制: (num_envs,) & (num_envs, 2))
+        stable_contact = stable_contact & is_warmed_up.unsqueeze(-1)
+        # -------------------------
+ 
+        # 4. Priority Determination
+        trigger_mask = stable_contact.clone()
+        
+        # Identify envs where both are stable
+        both_stable = torch.all(stable_contact, dim=-1) # (num_envs,)
+        
+        # Handle "Both Stable" case:
+        if torch.any(both_stable):
+            # Get current Fxy for both feet in these envs
+            current_f_xy = f_xy[both_stable] # (N_both, 2)
+            
+            # Find which foot has larger force
+            larger_idx = torch.argmax(current_f_xy, dim=-1) # (N_both,)
+            
+            # Create a mask for these envs
+            resolved_mask = torch.nn.functional.one_hot(larger_idx, num_classes=2).bool()
+            
+            # Assign back to trigger_mask
+            trigger_mask[both_stable] = resolved_mask
+            
+        return trigger_mask
+
+
+    def _compute_feedforward_action(self, trigger_mask):
+        """
+        计算前馈动作
+        规则：
+        - 左腿 (Left): Hip idx=1, Knee idx=2. 符号为正 (+)
+        - 右腿 (Right): Hip idx=5, Knee idx=6. 符号为负 (-)
+        """
+        # 1. 更新计时器 (与之前逻辑相同)
+        active_mask = self.ff_timers >= 0
+        self.ff_timers[active_mask] += self.dt
+        
+        new_trigger = trigger_mask & (self.ff_timers < 0)
+        self.ff_timers[new_trigger] = 0.0 
+        
+        done_mask = self.ff_timers > self.ff_duration
+        self.ff_timers[done_mask] = -1.0 
+        
+        # 2. 生成 0~1 的余弦波轨迹
+        traj_val = torch.zeros_like(self.ff_timers)
+        active_now = self.ff_timers >= 0
+        if torch.any(active_now):
+            t = self.ff_timers[active_now]
+            phase = (2 * torch.pi * t) / self.ff_duration
+            traj_val[active_now] = 0.5 * (1 - torch.cos(phase))
+            
+        # 3. 映射关节 (关键修改部分)
+        ff_action = torch.zeros_like(self.actions)
+        scale_pos = self.cfg.control.action_scale_pos
+        
+        # === 左腿 (Left Leg) ===
+        # 索引: 0, [1], [2], 3
+        # 符号: 正 (+)
+        # traj_val[:, 0] 对应左腿计时器的值
+        left_val = traj_val[:, 0] / scale_pos
+        ff_action[:, 1] = left_val * self.ff_amp_hip   # Left Hip (+)
+        ff_action[:, 2] = left_val * self.ff_amp_knee  # Left Knee (+)
+        
+        # === 右腿 (Right Leg) ===
+        # 索引: 4, [5], [6], 7
+        # 符号: 负 (-)
+        # traj_val[:, 1] 对应右腿计时器的值
+        right_val = traj_val[:, 1] / scale_pos
+        ff_action[:, 5] = right_val * -self.ff_amp_hip  # Right Hip (-)
+        ff_action[:, 6] = right_val * -self.ff_amp_knee # Right Knee (-)
+        
+        return ff_action
     # ------------ reward functions----------------
 
     def _reward_feet_distance(self):
@@ -393,8 +565,8 @@ class BipedWF(BaseTask):
         feet_distance = torch.norm(
             self.foot_positions[:, 0, :2] - self.foot_positions[:, 1, :2], dim=-1
         )
-        reward = torch.clip(self.cfg.rewards.min_feet_distance - feet_distance, 0, 1) + \
-                 torch.clip(feet_distance - self.cfg.rewards.max_feet_distance, 0, 1)
+        reward = torch.clamp(self.cfg.rewards.min_feet_distance - feet_distance, min=0.0) + \
+                 torch.clamp(feet_distance - self.cfg.rewards.max_feet_distance, min=0.0)
         return reward
 
     def _reward_collision(self):
@@ -603,7 +775,7 @@ class BipedWF(BaseTask):
 
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        ang_vel_error = torch.abs(self.commands[:, 2] - self.base_ang_vel[:, 2])
         reward = torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
         if self.cfg.commands.num_commands > 4:
             jump_cmd = self.commands[:, 4]
@@ -625,3 +797,237 @@ class BipedWF(BaseTask):
             is_jumping = jump_cmd > 0.05
             reward[is_jumping] = 0.0
         return reward
+
+
+    # ----------------------------------------------------------------
+    # [NEW] Missing Rewards from CTBC Paper Table II
+    # ----------------------------------------------------------------
+
+    def _reward_feet_clearance(self):
+        """
+        [Paper] Feet clearance: Encourages swing foot to be within [h_min, h_max].
+        Critical for blind stair climbing.
+        """
+        # 获取足端高度 (相对于基座或地面，论文通常指相对于地面)
+        # 假设 foot_positions 是世界坐标，需要减去地形高度
+        # 这里简化使用相对于 base 的高度做演示，或者你如果有测得的地形高度更好
+        # 论文建议范围: 10cm < h < 20cm
+        
+        target_height_min = 0.10 
+        target_height_max = 0.20
+        
+        # 判断摆动腿 (Swing leg): 接触力 < 1.0 为摆动
+        contact = self._get_wheel_contacts()
+        is_swing = ~contact
+        
+        
+        # Use _get_foot_heights() to get terrain height at foot positions
+        # self.measured_heights is (num_envs, num_samples), which causes shape mismatch if used directly
+        foot_heights = self._get_foot_heights()
+        foot_z = self.foot_positions[:, :, 2] - foot_heights
+        
+        # 奖励计算: 只有在摆动相且高度在范围内才给分
+        in_range = (foot_z > target_height_min) & (foot_z < target_height_max)
+        reward = torch.sum(is_swing.float() * in_range.float(), dim=1)
+        return reward
+
+    def _reward_feet_air_time(self):
+        """
+        [Paper] Feet air time: Encourages longer steps.
+        Rewrd is given when the foot first touches the ground after a swing phase.
+        """
+        # 注意：这需要你在 step() 或 post_physics_step() 中维护 self.feet_air_time 变量
+        # 假设你已经在 update_feet_air_time 中更新了它
+        # 这是一个稀疏奖励，只有落地瞬间有
+        
+        contact = self._get_wheel_contacts()
+        # 这一帧接触，上一帧没接触 => 刚落地 (First contact)
+        # 假设 self.last_contacts 存在
+        first_contact = (self.feet_air_time > 0.) & contact
+        
+        rew_airTime = torch.sum(torch.clamp(self.feet_air_time, max = 0.5) * first_contact.float(), dim=1)
+
+        self.feet_air_time += self.dt
+
+        # 落地后重置 air_time
+        self.feet_air_time[contact] = 0.
+        
+        return rew_airTime
+
+    def _reward_feet_contact_number(self):
+        """
+        [Paper] Feet contact number: 
+        Reward matching the desired contact state defined by the trigger.
+        Formula: I(contact == stance) - 1.3 * I(contact != stance)
+        """
+        # 1. 获取实际物理接触 (Actual Physics State)
+        # 只要总接触力 > 1.0 就认为接触了 (不管是踩在平地还是踢到台阶)
+        # shape: (num_envs, 2)
+        actual_contact = self._get_wheel_contacts() 
+        
+        # 2. 获取期望接触状态 (Desired State from Trigger)
+        # 逻辑：
+        # - 如果 timer >= 0: 说明 Fxy 触发了，正在执行前馈抬腿，所以期望是【悬空/Swing】(False)
+        # - 如果 timer < 0:  说明没触发，正常跑，所以期望是【接触/Stance】(True)
+        # 注意：这里直接用了 step() 里计算好的 ff_timers，它包含了 Fxy 的判断结果
+        desired_contact = (self.ff_timers < 0)
+        
+        # 3. 比较两者是否一致
+        is_match = (actual_contact == desired_contact)
+        
+        # 4. 计算奖惩 (Paper Table II)
+        # Match: +1.0
+        # Mismatch: -1.3 (惩罚更重，强迫机器人听指挥)
+        reward = is_match.float() * 1.0 - (~is_match).float() * 1.3
+        
+        return torch.sum(reward, dim=1)
+
+    def _reward_wheel_zero_velocity(self):
+        """
+        [Paper] Wheel zero velocity: Penalize wheel rotation when leg is in swing phase.
+        Prevents dangerous spinning in air.
+        """
+        contact = self._get_wheel_contacts()
+        is_swing = ~contact
+        
+        # 获取轮子关节速度 (假设轮子索引是 3 和 7，请根据你的 cfg 调整)
+        # 左轮: actions index 3 (vel control?), 右轮: actions index 7
+        # 对应 dof_vel 索引
+        wheel_indices = [3, 7] # 请确认你的 DOF 顺序！
+        
+        wheel_vel = self.dof_vel[:, wheel_indices]
+        
+        # 惩罚: exp(- sum( is_swing * vel^2 ))
+        reward = torch.exp(-torch.sum(is_swing.float() * torch.square(wheel_vel), dim=1))
+        return reward
+
+    def _reward_wheel_spin(self):
+        """
+        [Paper] Wheel spin: Regularization to prevent wheel slipping on ground.
+        Logic: If wheel linear vel >> foot linear vel
+        """
+        # 轮子半径
+        r = self.cfg.asset.foot_radius # 0.06 or similar
+        
+        # 轮子角速度
+        wheel_indices = [3, 7]
+        wheel_omega = self.dof_vel[:, wheel_indices]
+        
+        # 轮子线速度 (r * omega)
+        v_wheel = torch.abs(r * wheel_omega)
+        
+        # 足端实际线速度 (世界坐标系下的绝对速度)
+        v_foot = torch.norm(self.foot_velocities[:, :, :2], dim=-1) # 只看水平速度
+        
+        # 误差: 0.8 * v_wheel - v_foot - 0.1 (阈值)
+        spin_error = 0.8 * v_wheel - v_foot - 0.1
+        
+        reward = torch.sum(torch.clamp(spin_error, min=0.0), dim=1)
+        return reward
+
+    def _reward_default_pose(self):
+        """
+        [Paper] Default pose: Penalize deviation from default joint positions.
+        """
+        # 排除轮子关节，只计算腿部关节
+        # 假设前3个是左腿，中间1个轮子(idx3)，后3个右腿，最后1个轮子(idx7)
+        leg_indices = [0, 1, 2, 4, 5, 6] 
+        
+        diff = self.dof_pos[:, leg_indices] - self.default_dof_pos[:, leg_indices]
+        return torch.sum(torch.abs(diff), dim=1)
+
+    def _reward_opposite_base_vel(self):
+        """
+        [Paper] Opposite base vel: Penalize moving backwards when commanded forwards.
+        """
+        v_cmd_x = self.commands[:, 0]
+        v_base_x = self.base_lin_vel[:, 0]
+        
+        # 只有当命令非零时才计算
+        # Logic: max(0, -sgn(v_cmd) * v_base)
+        penalty = torch.clamp(-torch.sign(v_cmd_x) * v_base_x, min=0.0)
+        return penalty
+
+    def _reward_feet_contact_forces(self):
+        """
+        [Paper] Feet contact forces: Penalize high impact forces.
+        """
+        max_force = 300.0 # 假设阈值，需调整
+        force_norms = torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1)
+        return torch.sum(torch.clamp(force_norms - max_force, min=0.0), dim=1)
+
+
+    # ----------------------------------------------------------------
+    # [Table II] Task Rewards (Strict Implementation)
+    # ----------------------------------------------------------------
+
+    def _reward_tracking_lin_vel_x(self):
+        # Formula: exp(-20 * (v_cmd_x - v_base_x)^2)
+        lin_vel_error_x = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
+        return torch.exp(-20.0 * lin_vel_error_x)
+
+    def _reward_tracking_lin_vel_y(self):
+        # Formula: exp(-20 * (v_cmd_y - v_base_y)^2)
+        lin_vel_error_y = torch.square(self.commands[:, 1] - self.base_lin_vel[:, 1])
+        return torch.exp(-20.0 * lin_vel_error_y)
+
+    def _reward_tracking_lin_vel_x_pb(self):
+        # Potential-based reward for X
+        current_reward = self._reward_tracking_lin_vel_x()
+        delta = current_reward - self.last_lin_vel_error_x
+        # Update history (Hack: updating state inside reward function)
+        self.last_lin_vel_error_x = current_reward.detach() 
+        return delta / self.dt
+
+    def _reward_tracking_lin_vel_y_pb(self):
+        # Potential-based reward for Y
+        current_reward = self._reward_tracking_lin_vel_y()
+        delta = current_reward - self.last_lin_vel_error_y
+        self.last_lin_vel_error_y = current_reward.detach()
+        return delta / self.dt
+
+
+    def _reward_tracking_target_pos(self):
+        """
+        [NEW] Tracking target pos
+        Formula: exp(-2 ||q - q_target||) - 0.2 ||q - q_target||
+        """
+        # Calculate q_target
+        # target = default + scale * action
+        # Only apply to leg joints (indices 0,1,2, 4,5,6), exclude wheels (3,7)
+        leg_indices = [0, 1, 2, 4, 5, 6]
+        
+        q = self.dof_pos[:, leg_indices]
+        q_des = self.default_dof_pos[:, leg_indices] + \
+                self.cfg.control.action_scale_pos * self.actions[:, leg_indices]
+        
+        error = torch.norm(q - q_des, dim=1)
+        
+        # exp(-2 * error) - 0.2 * error (Assuming L2 norm inside exp based on Table II syntax ||...||)
+        # Note: Formula in image is exp(-2||err||), not squared.
+        return torch.exp(-2.0 * error) - 0.2 * error
+
+    # ----------------------------------------------------------------
+    # [Table II] Regularization Rewards (New additions)
+    # ----------------------------------------------------------------
+
+    def _reward_opposite_wheel_vel(self):
+        """
+        [NEW] Opposite wheel vel
+        Formula: sum_j max(0, -sgn(v_cmd) * theta_dot_j)
+        Penalize wheels spinning opposite to command.
+        """
+        wheel_indices = [3, 7]
+        wheel_vel = self.dof_vel[:, wheel_indices] # (num_envs, 2)
+        v_cmd_x = self.commands[:, 0].unsqueeze(1) # (num_envs, 1)
+        
+        # Only penalize if command is significant
+        reward = torch.sum(torch.clamp(-torch.sign(v_cmd_x) * wheel_vel, min=0.0), dim=1)
+        return reward
+
+    def _reward_dof_vel(self):
+        """
+        [NEW] Dof vel
+        Formula: sum(q_dot^2)
+        """
+        return torch.sum(torch.square(self.dof_vel), dim=1)

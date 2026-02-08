@@ -67,6 +67,11 @@ class BaseTask:
         self.graphics_device_id = self.sim_device_id
         if self.headless == True:
             self.graphics_device_id = -1
+        
+        if getattr(cfg.env, "enable_camera_sensors", False):
+            self.graphics_device_id = self.sim_device_id
+        
+        self.enable_camera_sensors = getattr(cfg.env, "enable_camera_sensors", False)
 
         self.num_envs = cfg.env.num_envs
         self.num_obs = cfg.env.num_observations
@@ -172,17 +177,21 @@ class BaseTask:
                     self.enable_viewer_sync = not self.enable_viewer_sync
 
             # fetch results
+        if self.viewer or self.enable_camera_sensors:
             if self.device != "cpu":
                 self.gym.fetch_results(self.sim, True)
 
             # step graphics
-            if self.enable_viewer_sync:
+        if self.enable_viewer_sync:
+            if self.viewer or self.enable_camera_sensors:
                 self.gym.step_graphics(self.sim)
+            
+            if self.viewer:
                 self.gym.draw_viewer(self.viewer, self.sim, True)
                 if sync_frame_time:
                     self.gym.sync_frame_time(self.sim)
-            else:
-                self.gym.poll_viewer_events(self.viewer)
+        elif self.viewer:
+            self.gym.poll_viewer_events(self.viewer)
     
     def compute_reward(self):
         """Compute rewards

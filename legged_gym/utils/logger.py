@@ -150,7 +150,84 @@ class Logger:
             a.plot(time, log["dof_torque"], label="measured")
         a.set(xlabel="time [s]", ylabel="Joint Torque [Nm]", title="Torque")
         a.legend()
+        
+        self._plot_custom_metrics(log, time)
+        
         plt.show()
+
+    def _plot_custom_metrics(self, state_log, time):
+        # Plot Contact Forces (Separated X, Y, Z)
+        fig1, (ax_x, ax_y, ax_z) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
+        
+        # Force X
+        if "wheel_force_x_L" in state_log:
+            ax_x.plot(time, state_log["wheel_force_x_L"], label="Left Wheel Fx")
+        if "wheel_force_x_R" in state_log:
+            ax_x.plot(time, state_log["wheel_force_x_R"], label="Right Wheel Fx")
+        ax_x.set(ylabel="Force [N]", title="Contact Force X")
+        ax_x.legend()
+        
+        # Force Y
+        if "wheel_force_y_L" in state_log:
+            ax_y.plot(time, state_log["wheel_force_y_L"], label="Left Wheel Fy")
+        if "wheel_force_y_R" in state_log:
+            ax_y.plot(time, state_log["wheel_force_y_R"], label="Right Wheel Fy")
+        ax_y.set(ylabel="Force [N]", title="Contact Force Y")
+        ax_y.legend()
+        
+        # Force Z
+        if "wheel_force_z_L" in state_log:
+            ax_z.plot(time, state_log["wheel_force_z_L"], label="Left Wheel Fz")
+        if "wheel_force_z_R" in state_log:
+            ax_z.plot(time, state_log["wheel_force_z_R"], label="Right Wheel Fz")
+        ax_z.set(xlabel="time [s]", ylabel="Force [N]", title="Contact Force Z")
+        ax_z.legend()
+        
+        # Plot Joint Positions (Hip & Knee)
+        fig2, (ax2_l, ax2_r) = plt.subplots(2, 1, sharex=True, figsize=(10, 8))
+        
+        # Left Leg
+        if "dof_pos_hip_L" in state_log:
+            ax2_l.plot(time, state_log["dof_pos_hip_L"], label="Hip L")
+        if "dof_pos_knee_L" in state_log:
+            ax2_l.plot(time, state_log["dof_pos_knee_L"], label="Knee L")
+        ax2_l.set(ylabel="Position [rad]", title="Left Leg Joint Positions")
+        ax2_l.legend()
+        
+        # Right Leg
+        if "dof_pos_hip_R" in state_log:
+            ax2_r.plot(time, state_log["dof_pos_hip_R"], label="Hip R")
+        if "dof_pos_knee_R" in state_log:
+            ax2_r.plot(time, state_log["dof_pos_knee_R"], label="Knee R")
+        ax2_r.set(xlabel="time [s]", ylabel="Position [rad]", title="Right Leg Joint Positions")
+        ax2_r.legend()
+
+        # Plot Trigger & Feedforward Actions
+        fig3, (ax3_trig, ax3_ff_hip, ax3_ff_knee) = plt.subplots(3, 1, sharex=True, figsize=(10, 10))
+        
+        # Trigger Mask
+        if "trigger_mask_L" in state_log:
+            ax3_trig.plot(time, state_log["trigger_mask_L"], label="Trigger L", alpha=0.7)
+        if "trigger_mask_R" in state_log:
+            ax3_trig.plot(time, state_log["trigger_mask_R"], label="Trigger R", alpha=0.7)
+        ax3_trig.set(ylabel="Trigger [bool]", title="Contact Trigger Mask")
+        ax3_trig.legend()
+        
+        # FF Actions Hip
+        if "ff_action_hip_L" in state_log:
+            ax3_ff_hip.plot(time, state_log["ff_action_hip_L"], label="FF Hip L")
+        if "ff_action_hip_R" in state_log:
+            ax3_ff_hip.plot(time, state_log["ff_action_hip_R"], label="FF Hip R")
+        ax3_ff_hip.set(ylabel="Action [rad]", title="Feedforward Hip Actions")
+        ax3_ff_hip.legend()
+
+        # FF Actions Knee
+        if "ff_action_knee_L" in state_log:
+            ax3_ff_knee.plot(time, state_log["ff_action_knee_L"], label="FF Knee L")
+        if "ff_action_knee_R" in state_log:
+            ax3_ff_knee.plot(time, state_log["ff_action_knee_R"], label="FF Knee R")
+        ax3_ff_knee.set(xlabel="time [s]", ylabel="Action [rad]", title="Feedforward Knee Actions")
+        ax3_ff_knee.legend()
 
     def print_rewards(self):
         print("Average rewards per second:")
