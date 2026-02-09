@@ -75,13 +75,13 @@ class BipedCfgWF(BaseConfig):
         measured_points_y = [-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4]
         selected = False  # select a unique terrain type and pass all arguments
         terrain_kwargs = None  # Dict of arguments for selected terrain
-        max_init_terrain_level = 4  # starting curriculum state
+        max_init_terrain_level = 0  # starting curriculum state
         terrain_length = 8.0
         terrain_width = 8.0
         num_rows = 10  # number of terrain rows (levels)
         num_cols = 20  # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        terrain_proportions = [0.2, 0.0, 0.4, 0.4, 0.0]
+        terrain_proportions = [0.2, 0.0, 0.6, 0.0, 0.2]
         # trimesh only:
         slope_treshold = (
             0.75  # slopes above this threshold will be corrected to vertical surfaces
@@ -147,11 +147,11 @@ class BipedCfgWF(BaseConfig):
         control_type = "P"
         stiffness = {
             "abad_L_Joint": 42,
-            "hip_L_Joint": 42,
-            "knee_L_Joint": 42,
+            "hip_L_Joint": 60,
+            "knee_L_Joint": 60,
             "abad_R_Joint": 42,
-            "hip_R_Joint": 42,
-            "knee_R_Joint": 42,
+            "hip_R_Joint": 60,
+            "knee_R_Joint": 60,
             "wheel_L_Joint": 0.0,
             "wheel_R_Joint": 0.0,
         }  # [N*m/rad]
@@ -243,7 +243,7 @@ class BipedCfgWF(BaseConfig):
             tracking_ang_vel_pb = 0.5
             
             # [NEW] Tracking target pos (0.8)
-            tracking_target_pos = 2.0 # TODO 1.0->2.0
+            tracking_target_pos = 10.0 # TODO 1.0->10.0
             
             # Gait / Contact related (All 2.0)
             feet_air_time = 4.0 # TODO 2.0->4.0
@@ -252,11 +252,11 @@ class BipedCfgWF(BaseConfig):
 
             # -------- Style Rewards (Table II) --------
             nominal_foot_position = 1.0
-            default_pose = -1.0
+            default_pose = -0.8
             feet_distance = -10.0      # Image says -10.0, code was -100
             wheel_zero_velocity = 0.5
             same_foot_x_position = -0.001 # TODO -2.0->-0.01
-            base_height = -20.0
+            base_height = -40.0  # TODO -20.0->-40.0
             orientation = -12.0        # Image says -12.0, code was -40.0
 
             # -------- Regularization Rewards (Table II) --------

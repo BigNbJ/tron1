@@ -131,11 +131,11 @@ class Terrain:
         )
         slope = difficulty * 0.25
         random_height = 0.05 + difficulty * 0.1
-        default_step_width = 0.45  # 28cm
+        default_step_width = 0.55  # 28cm
         max_step_height = 0.3
         step_height =  difficulty * 0.15
         step_slope = step_height / default_step_width
-        discrete_obstacles_height = 0.05 + difficulty * 0.1
+        discrete_obstacles_height = 0. + difficulty * 0.08
         stepping_stones_size = 1.5 * (1.05 - difficulty)
         stone_distance = 0.05 if difficulty == 0 else 0.1
         gap_size = 1.0 * difficulty
@@ -166,9 +166,7 @@ class Terrain:
             )
         elif choice < self.proportions[3]:
             step_scale = np.array([1, 1.05, 0.95, 1.1, 0.9, 1.2, 0.8])
-            # 防止索引越界：确保索引在 0 到 6 之间
-            idx_2 = int((self.terrain_num[2] - 1) / self.cfg.num_rows)
-            idx_2 = min(idx_2, len(step_scale) - 1)
+            idx_2 = int((self.terrain_num[2] - 1) / self.cfg.num_rows) % len(step_scale)
             
             if choice < self.proportions[2]:
                 self.terrain_num[2] += 1
@@ -180,9 +178,7 @@ class Terrain:
                 )
             else:
                 self.terrain_num[3] += 1
-                # 防止索引越界
-                idx_3 = int((self.terrain_num[3] - 1) / self.cfg.num_rows)
-                idx_3 = min(idx_3, len(step_scale) - 1)
+                idx_3 = int((self.terrain_num[3] - 1) / self.cfg.num_rows) % len(step_scale)
                 
                 step_width = (
                     default_step_width

@@ -339,7 +339,7 @@ def play(args):
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.push_robots = False
 
-    env_cfg.terrain.mesh_type = "heightfield"
+    env_cfg.terrain.mesh_type = "heightfield" if args.headless else "trimesh"
 
     if RECORD_VIDEO:
         env_cfg.env.enable_camera_sensors = True

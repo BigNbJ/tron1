@@ -939,8 +939,22 @@ class BipedWF(BaseTask):
         leg_indices = [0, 1, 2, 4, 5, 6] 
         
         diff = self.dof_pos[:, leg_indices] - self.default_dof_pos[:, leg_indices]
-        return torch.sum(torch.abs(diff), dim=1)
-
+        
+        # --- [NEW] 智能屏蔽逻辑 ---
+        # 1. 获取触发状态 (ff_timers >= 0 表示正在执行抬腿)
+        # ff_timers shape: (num_envs, 2) -> 扩展到关节维度
+        # 假设关节顺序: [L_Abad, L_Hip, L_Knee, R_Abad, R_Hip, R_Knee]
+        
+        # 简单处理：如果该环境有任何腿在触发，暂时减弱该环境的 default_pose 惩罚
+        is_triggered = torch.any(self.ff_timers >= 0, dim=1) # (num_envs,)
+        
+        penalty = torch.sum(torch.abs(diff), dim=1)
+        
+        # 如果触发了，惩罚系数乘 0.1 (几乎忽略)，否则乘 1.0 (正常惩罚)
+        scale = torch.where(is_triggered, 0.1, 1.0)
+        
+        return penalty * scale
+        
     def _reward_opposite_base_vel(self):
         """
         [Paper] Opposite base vel: Penalize moving backwards when commanded forwards.

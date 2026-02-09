@@ -1,0 +1,9 @@
+Exported policy as onnx script to:  /home/server/workspace/WLG/Deep-Whole-Body-Control/tron1-rl-isaacgym/logs/pointfoot_flat/WF_TRON1A/exported/policies/encoder.onnx
+Traceback (most recent call last):
+  File "legged_gym/scripts/play.py", line 549, in <module>
+    play(args)
+  File "legged_gym/scripts/play.py", line 464, in play
+    recorder.save(filename)
+  File "legged_gym/scripts/play.py", line 291, in save
+    img = img.reshape(self.h, self.w, 4)
+ValueError: cannot reshape array of size 0 into shape (720,1280,4)
