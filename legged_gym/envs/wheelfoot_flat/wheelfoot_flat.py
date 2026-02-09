@@ -113,7 +113,9 @@ class BipedWF(BaseTask):
         # --- [NEW] Contact Trigger & Feedforward Logic ---
 
         # 1. 检测触发
-        trigger_mask = self.check_contact_trigger(trigger_threshold=20.0) 
+        trigger_mask = self.check_contact_trigger(
+            trigger_threshold=self.cfg.env.contact_trigger_threshold
+        )
         
         # 2. 计算前馈 (使用修改后的函数)
         ff_actions = self._compute_feedforward_action(trigger_mask)
@@ -416,10 +418,10 @@ class BipedWF(BaseTask):
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
         # History buffer for contact trigger mechanism: (num_envs, 2, 3)
-        self.contact_force_history = torch.zeros(self.num_envs, 2, 3, device=self.device, dtype=torch.float)
+        self.contact_force_history = torch.zeros(self.num_envs, 2, 2, device=self.device, dtype=torch.float)
         # [NEW] Critic 用的 3D 向量历史 (存 Fx, Fy, Fz)
         # Shape: (num_envs, 2, 3, 3) -> (环境数, 左右脚, 3维力, 历史长度3)
-        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 3, device=self.device, dtype=torch.float)
+        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 2, device=self.device, dtype=torch.float)
         
         # [NEW] Buffers for Potential-Based (PB) rewards splitting
         # Used to store previous error for tracking_lin_vel_x_pb and y_pb
@@ -976,6 +978,11 @@ class BipedWF(BaseTask):
         # 只有当命令非零时才计算
         # Logic: max(0, -sgn(v_cmd) * v_base)
         penalty = torch.clamp(-torch.sign(v_cmd_x) * v_base_x, min=0.0)
+
+        # [关键修改] 爬楼梯时允许短暂的速度反向（因为可能被台阶弹回来）
+        is_triggered = torch.any(self.ff_timers >= 0, dim=1)
+        penalty[is_triggered] = 0.0
+
         return penalty
 
     def _reward_feet_contact_forces(self):
@@ -994,7 +1001,10 @@ class BipedWF(BaseTask):
     def _reward_tracking_lin_vel_x(self):
         # Formula: exp(-20 * (v_cmd_x - v_base_x)^2)
         lin_vel_error_x = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
-        return torch.exp(-20.0 * lin_vel_error_x)
+        reward = torch.exp(-20.0 * lin_vel_error_x)
+        is_triggered = torch.any(self.ff_timers >= 0, dim=1)
+        reward[is_triggered] = 1.0
+        return reward
 
     def _reward_tracking_lin_vel_y(self):
         # Formula: exp(-20 * (v_cmd_y - v_base_y)^2)

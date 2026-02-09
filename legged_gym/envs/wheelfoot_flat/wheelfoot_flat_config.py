@@ -44,6 +44,7 @@ class BipedCfgWF(BaseConfig):
         obs_history_length = 10  # number of observations stacked together
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
+        contact_trigger_threshold = 10.0
 
     class terrain:
         mesh_type = "trimesh"  # "heightfield" # none, plane, heightfield or trimesh
@@ -102,7 +103,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-2.0, 2.0]  # min max [m/s]
+            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -257,7 +258,7 @@ class BipedCfgWF(BaseConfig):
             wheel_zero_velocity = 0.5
             same_foot_x_position = -0.001 # TODO -2.0->-0.01
             base_height = -40.0  # TODO -20.0->-40.0
-            orientation = -12.0        # Image says -12.0, code was -40.0
+            orientation = -30.0        # Image says -12.0, code was -40.0
 
             # -------- Regularization Rewards (Table II) --------
             wheel_spin = -5.0
