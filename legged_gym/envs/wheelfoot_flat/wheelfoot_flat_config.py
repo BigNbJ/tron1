@@ -35,7 +35,7 @@ class BipedCfgWF(BaseConfig):
         num_envs = 8192
         num_observations = 28 # + 6 - 2 - 4 - 2  # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
         num_height_samples = 117
-        num_critic_observations = 3 + num_observations + 6
+        num_critic_observations = 3 + num_observations + 6 + num_height_samples
         # num_critic_observations = 3 + num_observations
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes

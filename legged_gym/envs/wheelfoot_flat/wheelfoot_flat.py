@@ -234,10 +234,14 @@ class BipedWF(BaseTask):
             ),
             dim=-1,
         )
+
+        height_obs = self.measured_heights * self.obs_scales.height_measurements
+
         critic_obs_buf = torch.cat((
             self.base_lin_vel * self.obs_scales.lin_vel,
             self.obs_buf,
             avg_contact_forces_flat * self.obs_scales.contact_forces,
+            height_obs,
         ), dim=-1)
         return obs_buf, critic_obs_buf
     
@@ -1000,10 +1004,11 @@ class BipedWF(BaseTask):
 
     def _reward_tracking_lin_vel_x(self):
         # Formula: exp(-20 * (v_cmd_x - v_base_x)^2)
-        lin_vel_error_x = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
-        reward = torch.exp(-20.0 * lin_vel_error_x)
         is_triggered = torch.any(self.ff_timers >= 0, dim=1)
-        reward[is_triggered] = 1.0
+        # 如果有触发，期望的跟踪线速度变为0
+        v_cmd_x = torch.where(is_triggered, torch.zeros_like(self.commands[:, 0]), self.commands[:, 0])
+        lin_vel_error_x = torch.square(v_cmd_x - self.base_lin_vel[:, 0])
+        reward = torch.exp(-20.0 * lin_vel_error_x)
         return reward
 
     def _reward_tracking_lin_vel_y(self):
