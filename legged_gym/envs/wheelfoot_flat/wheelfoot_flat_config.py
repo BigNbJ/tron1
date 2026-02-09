@@ -103,11 +103,11 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
+            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
-            ang_vel_yaw = [-0.6, 0.6]  # min max [rad/s]
+            ang_vel_yaw = [-0.1, 0.1]  # min max [rad/s]
             heading = [-3.14159, 3.14159]
             jump_height = [0.1, 0.5]
 
@@ -247,9 +247,9 @@ class BipedCfgWF(BaseConfig):
             tracking_target_pos = 10.0 # TODO 1.0->10.0
             
             # Gait / Contact related (All 2.0)
-            feet_air_time = 4.0 # TODO 2.0->4.0
-            feet_contact_number = 4.0  # Image says 2.0, code was 1.0 # TODO
-            feet_clearance = 4.0 # TODO
+            feet_air_time = 1.5 # TODO 2.0->4.0
+            feet_contact_number = 2.0  # Image says 2.0, code was 1.0 # TODO
+            feet_clearance = 2.0 # TODO
 
             # -------- Style Rewards (Table II) --------
             nominal_foot_position = 1.0

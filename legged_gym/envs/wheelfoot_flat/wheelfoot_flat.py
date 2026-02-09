@@ -439,7 +439,7 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 2.0         # 权重 TODO 1.0->2.0
+        self.k_ff = 0.5         # 权重 TODO 1.0->2.0
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
@@ -870,7 +870,7 @@ class BipedWF(BaseTask):
         """
         # 直接读取我们在 post_physics_step 里算好的“结算时间”和“落地标记”
         rew_airTime = torch.sum(
-            torch.clamp(self.last_air_time, max=0.5) * self.first_contact.float(), 
+            torch.clamp(self.last_air_time, max=0.3) * self.first_contact.float(), 
             dim=1
         )
         
