@@ -439,7 +439,8 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 0.5         # 权重 TODO 1.0->2.0
+        self.k_ff = 0.8         # 权重 TODO 1.0->2.0
+
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
