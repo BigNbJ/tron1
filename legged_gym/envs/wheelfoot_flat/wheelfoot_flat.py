@@ -431,7 +431,7 @@ class BipedWF(BaseTask):
         self.ff_timers = torch.full((self.num_envs, 2), -1.0, device=self.device, dtype=torch.float)
         
         # 参数设置
-        self.ff_duration = 0.6  # 周期 T
+        self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
         self.k_ff = 2.0         # 权重 TODO 1.0->2.0
         
@@ -538,9 +538,20 @@ class BipedWF(BaseTask):
         # 1. 更新计时器 (与之前逻辑相同)
         active_mask = self.ff_timers >= 0
         self.ff_timers[active_mask] += self.dt
+
+        # === [修复] 添加互斥锁逻辑 ===
+        # 检查是否有【任何一条腿】正在执行任务
+        # shape: (num_envs,) 
+        any_leg_active = torch.any(self.ff_timers >= 0, dim=1)
         
-        new_trigger = trigger_mask & (self.ff_timers < 0)
-        self.ff_timers[new_trigger] = 0.0 
+        # 只有在【没有任何腿在忙】的情况下，才允许接受新的触发
+        # 广播 active_mask: (num_envs,) -> (num_envs, 2)
+        allow_trigger = ~any_leg_active.unsqueeze(-1)
+        
+        # 更新 trigger 条件：必须是 Trigger有效 且 Timer闲置 且 互斥锁允许
+        new_trigger = trigger_mask & (self.ff_timers < 0) & allow_trigger        
+        # 启动计时器
+        self.ff_timers[new_trigger] = 0.0
         
         done_mask = self.ff_timers > self.ff_duration
         self.ff_timers[done_mask] = -1.0 
