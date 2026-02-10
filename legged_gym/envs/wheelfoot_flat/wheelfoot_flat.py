@@ -439,7 +439,7 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 1.0         # 权重 TODO 1.0->2.0
+        self.k_ff = 0.7         # 权重 TODO 1.0->2.0
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
@@ -503,7 +503,7 @@ class BipedWF(BaseTask):
 
         # --- [新增] 起步保护逻辑 ---
         # 设定保护时间，例如 50 步 (假设 dt=0.02s，即 1秒)
-        startup_steps = 20 
+        startup_steps = 50 
         # 创建掩码：只有 episode 长度大于 startup_steps 的环境才允许触发
         is_warmed_up = self.episode_length_buf > startup_steps
         
@@ -1006,7 +1006,7 @@ class BipedWF(BaseTask):
         # Formula: exp(-20 * (v_cmd_x - v_base_x)^2)
         is_triggered = torch.any(self.ff_timers >= 0, dim=1)
         # 如果有触发，期望的跟踪线速度变为0
-        v_cmd_x = torch.where(is_triggered, -0.5 * self.commands[:, 0], self.commands[:, 0])
+        v_cmd_x = torch.where(is_triggered, torch.zeros_like(self.commands[:, 0]), self.commands[:, 0])
         lin_vel_error_x = torch.square(v_cmd_x - self.base_lin_vel[:, 0])
         reward = torch.exp(-20.0 * lin_vel_error_x)
         return reward
