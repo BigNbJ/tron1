@@ -44,7 +44,7 @@ class BipedCfgWF(BaseConfig):
         obs_history_length = 10  # number of observations stacked together
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
-        contact_trigger_threshold = 10.0
+        contact_trigger_threshold = 5.0
 
     class terrain:
         mesh_type = "trimesh"  # "heightfield" # none, plane, heightfield or trimesh

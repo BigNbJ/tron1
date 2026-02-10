@@ -422,10 +422,10 @@ class BipedWF(BaseTask):
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
         # History buffer for contact trigger mechanism: (num_envs, 2, 3)
-        self.contact_force_history = torch.zeros(self.num_envs, 2, 2, device=self.device, dtype=torch.float)
+        self.contact_force_history = torch.zeros(self.num_envs, 2, 1, device=self.device, dtype=torch.float)
         # [NEW] Critic 用的 3D 向量历史 (存 Fx, Fy, Fz)
         # Shape: (num_envs, 2, 3, 3) -> (环境数, 左右脚, 3维力, 历史长度3)
-        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 2, device=self.device, dtype=torch.float)
+        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 1, device=self.device, dtype=torch.float)
         
         # [NEW] Buffers for Potential-Based (PB) rewards splitting
         # Used to store previous error for tracking_lin_vel_x_pb and y_pb
@@ -439,8 +439,7 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 0.8         # 权重 TODO 1.0->2.0
-
+        self.k_ff = 0.7         # 权重 TODO 1.0->2.0
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
@@ -504,7 +503,7 @@ class BipedWF(BaseTask):
 
         # --- [新增] 起步保护逻辑 ---
         # 设定保护时间，例如 50 步 (假设 dt=0.02s，即 1秒)
-        startup_steps = 50 
+        startup_steps = 20 
         # 创建掩码：只有 episode 长度大于 startup_steps 的环境才允许触发
         is_warmed_up = self.episode_length_buf > startup_steps
         
