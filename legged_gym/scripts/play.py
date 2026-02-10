@@ -30,6 +30,7 @@
 
 from legged_gym import LEGGED_GYM_ROOT_DIR
 import os
+import csv
 
 import isaacgym
 from isaacgym.torch_utils import *
@@ -415,6 +416,34 @@ def play(args):
     
     # Initialize Live Plotter
     live_plotter = LivePlotter(max_len=600, dt=env.dt, refresh_rate=5, action_scale=action_scale)
+    csv_rows = []
+    csv_fieldnames = [
+        "frame",
+        "force_x_l",
+        "force_x_r",
+        "force_y_l",
+        "force_y_r",
+        "base_height",
+        "measured_height",
+        "trigger_l",
+        "trigger_r",
+        "pol_hip_l",
+        "pol_hip_r",
+        "pol_knee_l",
+        "pol_knee_r",
+        "ff_hip_l",
+        "ff_hip_r",
+        "ff_knee_l",
+        "ff_knee_r",
+        "fused_hip_l",
+        "fused_hip_r",
+        "fused_knee_l",
+        "fused_knee_r",
+        "hip_pos_l",
+        "hip_pos_r",
+        "knee_pos_l",
+        "knee_pos_r",
+    ]
     
     if RECORD_VIDEO:
         env.set_camera_video_props(frame_size=(720, 480), camera_offset=(0.0, 2.5, 0.5), camera_rotation=(0., 0., -90.0), env_idx=robot_index, actor_idx=0, rigid_body_idx=0, fps=50)
@@ -448,44 +477,99 @@ def play(args):
             # actions shape: (num_envs, 12)
             # Indices: Left Hip=1, Left Knee=2, Right Hip=5, Right Knee=6
             pol_actions = actions[robot_index].cpu()
+            force_x_l = forces[0, 0].item()
+            force_x_r = forces[1, 0].item()
+            force_y_l = forces[0, 1].item()
+            force_y_r = forces[1, 1].item()
+            base_height = env.base_height[robot_index].item()
+            measured_height = torch.mean(env.measured_heights[robot_index]).item()
+            trigger_l = infos["trigger_mask"][robot_index, 0].item()
+            trigger_r = infos["trigger_mask"][robot_index, 1].item()
+            pol_hip_l = pol_actions[1].item()
+            pol_hip_r = pol_actions[5].item()
+            pol_knee_l = pol_actions[2].item()
+            pol_knee_r = pol_actions[6].item()
+            ff_hip_l = infos["ff_actions"][robot_index, 1].item()
+            ff_hip_r = infos["ff_actions"][robot_index, 5].item()
+            ff_knee_l = infos["ff_actions"][robot_index, 2].item()
+            ff_knee_r = infos["ff_actions"][robot_index, 6].item()
+            fused_hip_l = env.actions[robot_index, 1].item()
+            fused_hip_r = env.actions[robot_index, 5].item()
+            fused_knee_l = env.actions[robot_index, 2].item()
+            fused_knee_r = env.actions[robot_index, 6].item()
+            hip_pos_l = (env.dof_pos[robot_index, 1] - env.raw_default_dof_pos[1]).item()
+            hip_pos_r = (env.dof_pos[robot_index, 5] - env.raw_default_dof_pos[5]).item()
+            knee_pos_l = (env.dof_pos[robot_index, 2] - env.raw_default_dof_pos[2]).item()
+            knee_pos_r = (env.dof_pos[robot_index, 6] - env.raw_default_dof_pos[6]).item()
             
             live_plotter.update(
                 # Forces (L/R)
-                force_x_l=forces[0, 0].item(), force_x_r=forces[1, 0].item(),
-                force_y_l=forces[0, 1].item(), force_y_r=forces[1, 1].item(),
+                force_x_l=force_x_l, force_x_r=force_x_r,
+                force_y_l=force_y_l, force_y_r=force_y_r,
                 
                 # Heights
-                base_height=env.base_height[robot_index].item(),
-                measured_height=torch.mean(env.measured_heights[robot_index]).item(),
+                base_height=base_height,
+                measured_height=measured_height,
                 
                 # Trigger
-                trigger_l=infos["trigger_mask"][robot_index, 0].item(),
-                trigger_r=infos["trigger_mask"][robot_index, 1].item(),
+                trigger_l=trigger_l,
+                trigger_r=trigger_r,
                 
                 # Policy Actions
-                pol_hip_l=pol_actions[1].item(), pol_hip_r=pol_actions[5].item(),
-                pol_knee_l=pol_actions[2].item(), pol_knee_r=pol_actions[6].item(),
+                pol_hip_l=pol_hip_l, pol_hip_r=pol_hip_r,
+                pol_knee_l=pol_knee_l, pol_knee_r=pol_knee_r,
                 
                 # FF Actions
-                ff_hip_l=infos["ff_actions"][robot_index, 1].item(),
-                ff_hip_r=infos["ff_actions"][robot_index, 5].item(),
-                ff_knee_l=infos["ff_actions"][robot_index, 2].item(),
-                ff_knee_r=infos["ff_actions"][robot_index, 6].item(),
+                ff_hip_l=ff_hip_l,
+                ff_hip_r=ff_hip_r,
+                ff_knee_l=ff_knee_l,
+                ff_knee_r=ff_knee_r,
                 
-                fused_hip_l=env.actions[robot_index, 1].item(),
-                fused_hip_r=env.actions[robot_index, 5].item(),
-                fused_knee_l=env.actions[robot_index, 2].item(),
-                fused_knee_r=env.actions[robot_index, 6].item(),
+                fused_hip_l=fused_hip_l,
+                fused_hip_r=fused_hip_r,
+                fused_knee_l=fused_knee_l,
+                fused_knee_r=fused_knee_r,
                 
                 # Joint Positions
-                hip_pos_l=(env.dof_pos[robot_index, 1] - env.raw_default_dof_pos[1]).item(),
-                hip_pos_r=(env.dof_pos[robot_index, 5] - env.raw_default_dof_pos[5]).item(),
-                knee_pos_l=(env.dof_pos[robot_index, 2] - env.raw_default_dof_pos[2]).item(),
-                knee_pos_r=(env.dof_pos[robot_index, 6] - env.raw_default_dof_pos[6]).item(),
+                hip_pos_l=hip_pos_l,
+                hip_pos_r=hip_pos_r,
+                knee_pos_l=knee_pos_l,
+                knee_pos_r=knee_pos_r,
             )
+            if len(csv_rows) < 500:
+                csv_rows.append(
+                    {
+                        "frame": i,
+                        "force_x_l": force_x_l,
+                        "force_x_r": force_x_r,
+                        "force_y_l": force_y_l,
+                        "force_y_r": force_y_r,
+                        "base_height": base_height,
+                        "measured_height": measured_height,
+                        "trigger_l": trigger_l,
+                        "trigger_r": trigger_r,
+                        "pol_hip_l": pol_hip_l,
+                        "pol_hip_r": pol_hip_r,
+                        "pol_knee_l": pol_knee_l,
+                        "pol_knee_r": pol_knee_r,
+                        "ff_hip_l": ff_hip_l,
+                        "ff_hip_r": ff_hip_r,
+                        "ff_knee_l": ff_knee_l,
+                        "ff_knee_r": ff_knee_r,
+                        "fused_hip_l": fused_hip_l,
+                        "fused_hip_r": fused_hip_r,
+                        "fused_knee_l": fused_knee_l,
+                        "fused_knee_r": fused_knee_r,
+                        "hip_pos_l": hip_pos_l,
+                        "hip_pos_r": hip_pos_r,
+                        "knee_pos_l": knee_pos_l,
+                        "knee_pos_r": knee_pos_r,
+                    }
+                )
 
         if RECORD_VIDEO and i == 500:
             video_dir = os.path.join(LEGGED_GYM_ROOT_DIR, 'videos')
+            os.makedirs(video_dir, exist_ok=True)
             env.end_and_save_recording_video(video_path=video_dir, filename=f"video_{args.task}.mp4")
             print(f"Video saved to {video_dir}/video_{args.task}.mp4")
             
@@ -493,6 +577,13 @@ def play(args):
             plot_path = os.path.join(video_dir, f"video_{args.task}_plot.png")
             live_plotter.fig.savefig(plot_path)
             print(f"Data plot saved to {plot_path}")
+            
+            csv_path = os.path.join(video_dir, f"video_{args.task}_plot.csv")
+            with open(csv_path, "w", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=csv_fieldnames)
+                writer.writeheader()
+                writer.writerows(csv_rows)
+            print(f"Data csv saved to {csv_path}")
 
         if RECORD_FRAMES:
             if i % 2:

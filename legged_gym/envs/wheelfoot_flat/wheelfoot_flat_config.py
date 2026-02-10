@@ -44,7 +44,7 @@ class BipedCfgWF(BaseConfig):
         obs_history_length = 10  # number of observations stacked together
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
-        contact_trigger_threshold = 5.0
+        contact_trigger_threshold = 1.0
 
     class terrain:
         mesh_type = "trimesh"  # "heightfield" # none, plane, heightfield or trimesh
@@ -247,7 +247,7 @@ class BipedCfgWF(BaseConfig):
             tracking_target_pos = 10.0 # TODO 1.0->10.0
             
             # Gait / Contact related (All 2.0)
-            feet_air_time = 1.5 # TODO 2.0->4.0
+            feet_air_time = 2.5 # TODO 2.0->4.0
             feet_contact_number = 2.0  # Image says 2.0, code was 1.0 # TODO
             feet_clearance = 2.0 # TODO
 
