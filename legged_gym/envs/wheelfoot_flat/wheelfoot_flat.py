@@ -422,10 +422,10 @@ class BipedWF(BaseTask):
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
         # History buffer for contact trigger mechanism: (num_envs, 2, 3)
-        self.contact_force_history = torch.zeros(self.num_envs, 2, 1, device=self.device, dtype=torch.float)
+        self.contact_force_history = torch.zeros(self.num_envs, 2, 2, device=self.device, dtype=torch.float)
         # [NEW] Critic 用的 3D 向量历史 (存 Fx, Fy, Fz)
         # Shape: (num_envs, 2, 3, 3) -> (环境数, 左右脚, 3维力, 历史长度3)
-        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 1, device=self.device, dtype=torch.float)
+        self.critic_contact_history = torch.zeros(self.num_envs, 2, 3, 2, device=self.device, dtype=torch.float)
         
         # [NEW] Buffers for Potential-Based (PB) rewards splitting
         # Used to store previous error for tracking_lin_vel_x_pb and y_pb
@@ -439,7 +439,7 @@ class BipedWF(BaseTask):
         # 参数设置
         self.ff_duration = 0.4  # 周期 T
         self.k_pf = 1.0
-        self.k_ff = 0.7         # 权重 TODO 1.0->2.0
+        self.k_ff = 0.5         # 权重 TODO 1.0->2.0
         
         # 定义幅度 (Magnitudes)，均为正数
         # 具体的正负号 (+/-) 在 _compute_feedforward_action 中根据左右腿施加
@@ -545,7 +545,17 @@ class BipedWF(BaseTask):
         active_mask = self.ff_timers >= 0
         self.ff_timers[active_mask] += self.dt
 
-        new_trigger = trigger_mask & (self.ff_timers < 0)
+        # === [修复] 添加互斥锁逻辑 ===
+        # 检查是否有【任何一条腿】正在执行任务
+        # shape: (num_envs,) 
+        any_leg_active = torch.any(self.ff_timers >= 0, dim=1)
+        
+        # 只有在【没有任何腿在忙】的情况下，才允许接受新的触发
+        # 广播 active_mask: (num_envs,) -> (num_envs, 2)
+        allow_trigger = ~any_leg_active.unsqueeze(-1)
+        
+        # 更新 trigger 条件：必须是 Trigger有效 且 Timer闲置 且 互斥锁允许
+        new_trigger = trigger_mask & (self.ff_timers < 0) & allow_trigger        
         # 启动计时器
         self.ff_timers[new_trigger] = 0.0
         

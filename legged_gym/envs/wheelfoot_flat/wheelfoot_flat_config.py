@@ -44,7 +44,7 @@ class BipedCfgWF(BaseConfig):
         obs_history_length = 10  # number of observations stacked together
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
-        contact_trigger_threshold = 5.0
+        contact_trigger_threshold = 10.0
 
     class terrain:
         mesh_type = "trimesh"  # "heightfield" # none, plane, heightfield or trimesh
@@ -103,7 +103,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [-0.25, 0.25]  # min max [m/s]
+            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -247,7 +247,7 @@ class BipedCfgWF(BaseConfig):
             tracking_target_pos = 10.0 # TODO 1.0->10.0
             
             # Gait / Contact related (All 2.0)
-            feet_air_time = 1.8 # TODO 2.0->4.0
+            feet_air_time = 1.5 # TODO 2.0->4.0
             feet_contact_number = 2.0  # Image says 2.0, code was 1.0 # TODO
             feet_clearance = 2.0 # TODO
 
@@ -308,7 +308,7 @@ class BipedCfgWF(BaseConfig):
         )
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
-        base_height_target = 0.52 + 0.1664
+        base_height_target = 0.6 + 0.1664
         feet_height_target = 0.10
         min_feet_distance = 0.32
         max_feet_distance = 0.35
