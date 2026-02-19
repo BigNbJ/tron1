@@ -78,6 +78,11 @@ class BipedWF(BaseTask):
         self.fail_buf[env_ids] = 0
         self.action_fifo[env_ids] = 0
         self.dof_pos_int[env_ids] = 0
+        # ctbc:接触触发
+        self.xy_force_history[env_ids] = 0.0
+        self.filtered_xy_contact[env_ids] = False
+        self.contact_forces_feet_ema[env_ids] = 0.0
+
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -191,8 +196,15 @@ class BipedWF(BaseTask):
             ),
             dim=-1,
         )
+
+        # 1. 计算缩放后的脚部力并拉平 [num_envs, 6]
+        # 注意括号的位置：(Tensor * float).view(...)
+        contact_forces_flattened = (self.contact_forces_feet_ema * self.cfg.normalization.obs_scales.contact_forces).view(self.num_envs, -1)
+
         critic_obs_buf = torch.cat((
-            self.base_lin_vel * self.obs_scales.lin_vel, self.obs_buf), dim=-1)
+            self.base_lin_vel * self.obs_scales.lin_vel, self.obs_buf,
+                contact_forces_flattened,
+                ), dim=-1)
         return obs_buf, critic_obs_buf
     
     def _post_physics_step_callback(self):
@@ -223,6 +235,12 @@ class BipedWF(BaseTask):
         self.base_height = torch.mean(
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
         )
+
+        self._check_contact_trigger()
+
+        current_feet_forces = self.contact_forces[:, self.feet_indices, :]
+        self.contact_forces_feet_ema = 0.2 * current_feet_forces + (1 - 0.2) * self.contact_forces_feet_ema
+       
 
     def _resample_commands(self, env_ids):
         """Randommly select commands of some environments
@@ -326,6 +344,41 @@ class BipedWF(BaseTask):
                 device=self.device, 
                 requires_grad=False
             )
+          
+        # 初始化 XY 受力历史缓冲区
+        # 形状: [num_envs, num_feet, history_length]
+        # dtype 使用 float，因为我们要真实存储力的大小
+        self.xy_force_history = torch.zeros(
+            self.num_envs, len(self.feet_indices), self.cfg.ctbc.history_length,
+            dtype=torch.float, 
+            device=self.device, 
+            requires_grad=False
+        )
+
+        self.filtered_xy_contact = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device)
+        
+        self.contact_forces_feet_ema = torch.zeros(
+            self.num_envs, len(self.feet_indices), 3,
+            dtype=torch.float, 
+            device=self.device, 
+            requires_grad=False
+        )
+
+    # ------------ Contact Trigger----------------
+
+
+    def _check_contact_trigger(self):
+        xy_forces = self.contact_forces[:, self.feet_indices, 0:2]
+        current_xy_norm = torch.norm(xy_forces, dim=2)
+        
+        self.xy_force_history = torch.roll(self.xy_force_history, shifts=1, dims=-1)
+        self.xy_force_history[:, :, 0] = current_xy_norm
+        
+        force_threshold = self.cfg.ctbc.force_threshold
+        is_high_force_history = self.xy_force_history > force_threshold
+        
+        # 将结果保存到类的属性中，供所有 Reward 共享读取
+        self.filtered_xy_contact = torch.all(is_high_force_history, dim=-1)
 
     # ------------ reward functions----------------
 
@@ -450,3 +503,26 @@ class BipedWF(BaseTask):
         # Penalize base height away from target
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
         return torch.abs(base_height - self.cfg.rewards.base_height_target)
+
+    # ------------ Contact Trigger----------------
+    def _reward_encourage_wheel_up(self):
+        """
+        [平稳抬腿奖励] 使用父类计算好的机身坐标系下相对速度。
+        逻辑：当左轮受到水平冲击时，鼓励左轮相对于机身向上抬起。
+        """
+        # 1. 确定左轮索引 (双轮足通常左轮为 0)
+        left_idx = 0
+        
+        # 2. 获取机身坐标系下的左轮相对速度
+        # self.foot_relative_velocities 形状: [num_envs, num_feet, 3]
+        # 索引 2 代表机身 Z 轴（垂直机身向上）
+        rel_vel_z = self.foot_relative_velocities[:, left_idx, 2]
+        
+        # 3. 获取我们之前在 post_physics_step 中更新好的 XY 接触掩码
+        left_contact_mask = self.filtered_xy_contact[:, left_idx].float()
+        
+        # 4. 提取向上速度：只奖励正值（向上收缩），不奖励向下伸展
+        upward_rel_vel = torch.clamp(rel_vel_z, min=0.0)
+        
+        # 5. 线性奖励计算：接触且抬起 = 得分
+        return upward_rel_vel * left_contact_mask

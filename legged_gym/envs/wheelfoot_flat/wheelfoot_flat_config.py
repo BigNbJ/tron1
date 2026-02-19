@@ -35,7 +35,7 @@ class BipedCfgWF(BaseConfig):
         num_envs = 8192
         num_height_samples = 117
         num_observations = 30 + 6 - 2 - 4 - 2 + num_height_samples # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
-        num_critic_observations = 3 + num_observations
+        num_critic_observations = 3 + num_observations + 6
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
@@ -223,6 +223,10 @@ class BipedCfgWF(BaseConfig):
         randomize_imu_offset_range = [-1.2, 1.2]
         delay_ms_range = [0, 20]
         max_push_vel_xy = 1.0
+    
+    class ctbc:
+        force_threshold = 5.0
+        history_length = 2
 
     class rewards:
         class scales:
@@ -251,6 +255,8 @@ class BipedCfgWF(BaseConfig):
             orientation = -12.0
             feet_distance = -100
             base_height = -20
+
+            encourage_wheel_up = 5.0
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
