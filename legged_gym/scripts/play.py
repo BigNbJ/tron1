@@ -350,7 +350,10 @@ def play(args):
     env = RecordVideoWrapper(env)
     # get robot_type
     robot_type = os.getenv("ROBOT_TYPE", "")
-    commands_val = torch.zeros(env.cfg.commands.num_commands, device=env.device)
+    num_commands = env.cfg.commands.num_commands
+    if env.cfg.commands.heading_command:
+        num_commands += 1
+    commands_val = torch.zeros(num_commands, device=env.device)
     
     if robot_type.startswith("PF"):
         commands_val[0] = 0.5
