@@ -340,7 +340,7 @@ def play(args):
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.push_robots = False
 
-    env_cfg.terrain.mesh_type = "heightfield" if args.headless else "trimesh"
+    env_cfg.terrain.mesh_type = "plane" if env_cfg.terrain.mesh_type == "plane" else ("heightfield" if args.headless else "trimesh")
 
     if RECORD_VIDEO:
         env_cfg.env.enable_camera_sensors = True
@@ -355,7 +355,7 @@ def play(args):
     if robot_type.startswith("PF"):
         commands_val[0] = 0.5
     elif robot_type == "WF_TRON1A":
-        commands_val[0] = 0.5
+        commands_val[0] = 0.2
     else:
         commands_val[0] = 1.5
     
