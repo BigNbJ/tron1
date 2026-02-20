@@ -231,7 +231,7 @@ class BipedCfgWF(BaseConfig):
     class rewards:
         class scales:
             # termination related rewards
-            keep_balance = 2.0
+            keep_balance = 1.0
 
             # tracking related rewards
             tracking_lin_vel = 4.0
@@ -242,8 +242,8 @@ class BipedCfgWF(BaseConfig):
             # regulation related rewards
             nominal_foot_position = 4.0
             leg_symmetry = 0.5
-            same_foot_x_position = -0.5 # 0.5
-            same_foot_z_position = -0
+            same_foot_x_position = -50 # 0.5
+            same_foot_z_position = -100
             lin_vel_z = -0.3
             ang_vel_xy = -0.3
             torques = -0.00016
@@ -256,7 +256,7 @@ class BipedCfgWF(BaseConfig):
             feet_distance = -100
             base_height = -20
 
-            encourage_wheel_up = 0.5
+            encourage_wheel_up = 0.8
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100

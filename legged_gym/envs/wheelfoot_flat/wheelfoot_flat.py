@@ -416,7 +416,14 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         foot_z_position_err = foot_positions_base[:,0,2] - foot_positions_base[:,1,2]
-        return foot_z_position_err ** 2
+        
+        cost = foot_z_position_err ** 2
+        
+        # Use filtered_xy_contact to check for contact
+        # If filtered_xy_contact is True for any foot, release the penalty
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        
+        return cost * (~any_contact).float()
 
     def _reward_leg_symmetry(self):
         foot_positions_base = self.foot_positions - \
@@ -427,15 +434,20 @@ class BipedWF(BaseTask):
         return torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
 
     def _reward_same_foot_x_position(self):
-        reward = 0
         foot_positions_base = self.foot_positions - \
                             (self.base_position).unsqueeze(1).repeat(1, len(self.feet_indices), 1)
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         foot_x_position_err = foot_positions_base[:,0,0] - foot_positions_base[:,1,0]
         # reward = torch.exp(-(foot_x_position_err ** 2)/ self.cfg.rewards.foot_x_position_sigma)
-        reward = torch.abs(foot_x_position_err)
-        return reward
+        
+        cost = torch.abs(foot_x_position_err)
+        
+        # Use filtered_xy_contact to check for contact
+        # If filtered_xy_contact is True for any foot, release the penalty
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        
+        return cost * (~any_contact).float()
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
