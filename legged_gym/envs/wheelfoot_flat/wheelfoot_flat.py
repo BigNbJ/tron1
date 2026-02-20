@@ -507,22 +507,20 @@ class BipedWF(BaseTask):
     # ------------ Contact Trigger----------------
     def _reward_encourage_wheel_up(self):
         """
-        [平稳抬腿奖励] 使用父类计算好的机身坐标系下相对速度。
-        逻辑：当左轮受到水平冲击时，鼓励左轮相对于机身向上抬起。
+        [平稳抬腿奖励 - 绝对速度版] 
+        逻辑：当左轮受到水平冲击时，鼓励左轮在世界坐标系下产生真实的向上速度。
         """
         # 1. 确定左轮索引 (双轮足通常左轮为 0)
         left_idx = 0
         
-        # 2. 获取机身坐标系下的左轮相对速度
-        # self.foot_relative_velocities 形状: [num_envs, num_feet, 3]
-        # 索引 2 代表机身 Z 轴（垂直机身向上）
-        rel_vel_z = self.foot_relative_velocities[:, left_idx, 2]
+        # 2. 获取世界坐标系下的左轮 Z 轴绝对速度
+        world_vel_z = self.foot_velocities[:, left_idx, 2]
         
         # 3. 获取我们之前在 post_physics_step 中更新好的 XY 接触掩码
         left_contact_mask = self.filtered_xy_contact[:, left_idx].float()
         
         # 4. 提取向上速度：只奖励正值（向上收缩），不奖励向下伸展
-        upward_rel_vel = torch.clamp(rel_vel_z, min=0.0)
+        upward_vel = torch.clamp(world_vel_z, min=0.0, max=1.0)
         
         # 5. 线性奖励计算：接触且抬起 = 得分
-        return upward_rel_vel * left_contact_mask
+        return upward_vel * left_contact_mask

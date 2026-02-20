@@ -225,13 +225,13 @@ class BipedCfgWF(BaseConfig):
         max_push_vel_xy = 1.0
     
     class ctbc:
-        force_threshold = 5.0
+        force_threshold = 50.0
         history_length = 2
 
     class rewards:
         class scales:
             # termination related rewards
-            keep_balance = 1.0
+            keep_balance = 2.0
 
             # tracking related rewards
             tracking_lin_vel = 4.0
@@ -242,8 +242,8 @@ class BipedCfgWF(BaseConfig):
             # regulation related rewards
             nominal_foot_position = 4.0
             leg_symmetry = 0.5
-            same_foot_x_position = -50 # 0.5
-            same_foot_z_position = -100
+            same_foot_x_position = -0.5 # 0.5
+            same_foot_z_position = -0
             lin_vel_z = -0.3
             ang_vel_xy = -0.3
             torques = -0.00016
@@ -256,7 +256,7 @@ class BipedCfgWF(BaseConfig):
             feet_distance = -100
             base_height = -20
 
-            encourage_wheel_up = 5.0
+            encourage_wheel_up = 0.5
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
@@ -299,7 +299,7 @@ class BipedCfgWF(BaseConfig):
         clip_actions = 100.0
 
     class noise:
-        add_noise = True
+        add_noise = False
         noise_level = 1.5  # scales other values
 
         class noise_scales:
