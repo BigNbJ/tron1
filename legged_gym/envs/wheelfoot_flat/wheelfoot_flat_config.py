@@ -225,7 +225,7 @@ class BipedCfgWF(BaseConfig):
         max_push_vel_xy = 1.0
     
     class ctbc:
-        force_threshold = 50.0
+        force_threshold = 20.0
         history_length = 2
 
     class rewards:
