@@ -34,8 +34,10 @@ class BipedCfgWF(BaseConfig):
     class env:
         num_envs = 8192
         num_height_samples = 117
-        num_observations = 30 + 6 - 2 - 4 - 2 + num_height_samples # +6 means wheel obs,-2 means sin&cos clock, -4 means gait para nums -2 means wheels pos
-        num_critic_observations = 3 + num_observations + 6
+        # Original: 30 + 6 - 2 - 4 - 2 + num_height_samples
+        # Added: + 6 (contact forces) + 2 (contact signal)
+        num_observations = 30 + 6 - 2 - 4 - 2 + num_height_samples + 6 + 2 
+        num_critic_observations = 3 + num_observations # + 6 (removed because it's now in obs)
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
@@ -100,7 +102,7 @@ class BipedCfgWF(BaseConfig):
         min_norm = 0.1
 
         class ranges:
-            lin_vel_x = [0.2, 0.8]  # min max [m/s]
+            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
             lin_vel_y = [0, 0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
@@ -234,7 +236,7 @@ class BipedCfgWF(BaseConfig):
             keep_balance = 1.0
 
             # tracking related rewards
-            tracking_lin_vel = 4.0
+            tracking_lin_vel = 7.0
             tracking_ang_vel = 2.0
             tracking_lin_vel_pb = 1.0
             tracking_ang_vel_pb = 0.2
@@ -242,21 +244,21 @@ class BipedCfgWF(BaseConfig):
             # regulation related rewards
             nominal_foot_position = 4.0
             leg_symmetry = 0.5
-            same_foot_x_position = -50 # 0.5
-            same_foot_z_position = -100
+            same_foot_x_position = -20 # 0.5
+            same_foot_z_position = -50
             lin_vel_z = -0.3
             ang_vel_xy = -0.3
             torques = -0.00016
             dof_acc = -1.5e-7
-            action_rate = -0.03
+            action_rate = -0.02
             dof_pos_limits = -2.0
             collision = -50
             action_smooth = -0.03
             orientation = -12.0
-            feet_distance = -100
+            feet_distance = -70
             base_height = -20
 
-            encourage_wheel_up = 0.8
+            encourage_wheel_up = 1.5
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100

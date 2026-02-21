@@ -82,6 +82,7 @@ class BipedWF(BaseTask):
         self.xy_force_history[env_ids] = 0.0
         self.filtered_xy_contact[env_ids] = False
         self.contact_forces_feet_ema[env_ids] = 0.0
+        self.contact_forces_history[env_ids] = 0.0
 
         # fill extras
         self.extras["episode"] = {}
@@ -182,6 +183,14 @@ class BipedWF(BaseTask):
         dof_pos = (self.dof_pos - self.default_dof_pos)[:,dof_list]
         # dof_pos = torch.remainder(dof_pos + self.pi, 2 * self.pi) - self.pi
 
+        # 1. 计算缩放后的脚部力并拉平 [num_envs, 6]
+        # 使用 3 帧平均值替代 EMA
+        contact_forces_avg = torch.mean(self.contact_forces_history, dim=-1)
+        contact_forces_flattened = (contact_forces_avg * self.cfg.normalization.obs_scales.contact_forces).view(self.num_envs, -1)
+        
+        # 2. 接触信号 (bool -> float) [num_envs, 2]
+        contact_signal = self.filtered_xy_contact.float()
+
         obs_buf = torch.cat(
             (
                 self.base_ang_vel * self.obs_scales.ang_vel,
@@ -192,18 +201,16 @@ class BipedWF(BaseTask):
                 # self.clock_inputs_sin.view(self.num_envs, 1),
                 # self.clock_inputs_cos.view(self.num_envs, 1),
                 # self.gaits,
-                torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
+                torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements,
+                contact_forces_flattened, # [num_envs, 6]
+                contact_signal,           # [num_envs, 2]
             ),
             dim=-1,
         )
 
-        # 1. 计算缩放后的脚部力并拉平 [num_envs, 6]
-        # 注意括号的位置：(Tensor * float).view(...)
-        contact_forces_flattened = (self.contact_forces_feet_ema * self.cfg.normalization.obs_scales.contact_forces).view(self.num_envs, -1)
-
         critic_obs_buf = torch.cat((
             self.base_lin_vel * self.obs_scales.lin_vel, self.obs_buf,
-                contact_forces_flattened,
+                # contact_forces_flattened, # already in obs_buf
                 ), dim=-1)
         return obs_buf, critic_obs_buf
     
@@ -241,6 +248,9 @@ class BipedWF(BaseTask):
         current_feet_forces = self.contact_forces[:, self.feet_indices, :]
         self.contact_forces_feet_ema = 0.2 * current_feet_forces + (1 - 0.2) * self.contact_forces_feet_ema
        
+        # Update 3-frame history for contact forces
+        self.contact_forces_history = torch.roll(self.contact_forces_history, shifts=1, dims=-1)
+        self.contact_forces_history[..., 0] = current_feet_forces
 
     def _resample_commands(self, env_ids):
         """Randommly select commands of some environments
@@ -327,7 +337,12 @@ class BipedWF(BaseTask):
         noise_vec[12:20] = (
             noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         )
-        noise_vec[20:] = 0.0  # previous actions
+        noise_vec[20:28] = 0.0  # previous actions
+        noise_vec[28:-8] = ( # height measurements
+            noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+        )
+        noise_vec[-8:-2] = 0.1 * noise_level * self.cfg.normalization.obs_scales.contact_forces # contact forces noise
+        noise_vec[-2:] = 0.0 # contact signal (bool) no noise
         return noise_vec
 
     def _init_buffers(self):
@@ -363,6 +378,14 @@ class BipedWF(BaseTask):
             device=self.device, 
             requires_grad=False
         )
+        
+        # New: Store 3 frames of contact forces history
+        self.contact_forces_history = torch.zeros(
+            self.num_envs, len(self.feet_indices), 3, 3, # [num_envs, num_feet, 3(xyz), 3(frames)]
+            dtype=torch.float, 
+            device=self.device, 
+            requires_grad=False
+        )
 
     # ------------ Contact Trigger----------------
 
@@ -389,6 +412,11 @@ class BipedWF(BaseTask):
         )
         reward = torch.clip(self.cfg.rewards.min_feet_distance - feet_distance, 0, 1) + \
                  torch.clip(feet_distance - self.cfg.rewards.max_feet_distance, 0, 1)
+        
+        # If any foot is in contact (climbing), relax the feet distance constraint
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        reward = reward * (~any_contact).float()
+        
         return reward
 
     def _reward_collision(self):
@@ -405,7 +433,17 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
             height_error = nominal_base_height - foot_positions_base[:, i, 2]
-            reward += torch.exp(-(height_error ** 2)/ self.cfg.rewards.nominal_foot_position_tracking_sigma)
+            
+            # Original reward term
+            term = torch.exp(-(height_error ** 2)/ self.cfg.rewards.nominal_foot_position_tracking_sigma)
+            
+            # If filtered_xy_contact is True for this foot, we release the penalty (give full reward)
+            # This allows the foot to lift without losing the nominal position reward
+            is_contact = self.filtered_xy_contact[:, i]
+            term = torch.where(is_contact, torch.ones_like(term), term)
+            
+            reward += term
+            
         vel_cmd_norm = torch.norm(self.commands[:, :3], dim=1)
         return reward / len(self.feet_indices)*torch.exp(-(vel_cmd_norm ** 2)/self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
     
@@ -431,7 +469,16 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         leg_symmetry_err = (abs(foot_positions_base[:,0,1])-abs(foot_positions_base[:,1,1]))
-        return torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
+        reward = torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
+        
+        # If any foot is in contact, relax symmetry constraint as legs might be in different phases
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        # However, leg symmetry is mainly about Y position (width), which might still be relevant.
+        # But during climbing, body might tilt or shift weight, so relaxing is safer.
+        # We use torch.where to set reward to 1.0 (max reward) when contact happens
+        reward = torch.where(any_contact, torch.ones_like(reward), reward)
+        
+        return reward
 
     def _reward_same_foot_x_position(self):
         foot_positions_base = self.foot_positions - \
@@ -451,15 +498,32 @@ class BipedWF(BaseTask):
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2])
+        reward = torch.square(self.base_lin_vel[:, 2])
+        
+        # If any foot is in contact, allow z velocity (jumping/lifting)
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        reward = reward * (~any_contact).float()
+        
+        return reward
 
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
-        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
+        reward = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
+        
+        # If any foot is in contact, allow angular velocity (tilt adjustment)
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        reward = reward * (~any_contact).float()
+        
+        return reward
 
     def _reward_orientation(self):
         # Penalize non flat base orientation
         reward = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+        
+        # If any foot is in contact, allow orientation tilt (pitch/roll)
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        reward = reward * (~any_contact).float()
+        
         return reward
 
     def _reward_torques(self):
@@ -519,8 +583,8 @@ class BipedWF(BaseTask):
     # ------------ Contact Trigger----------------
     def _reward_encourage_wheel_up(self):
         """
-        [平稳抬腿奖励 - 绝对速度版] 
-        逻辑：当左轮受到水平冲击时，鼓励左轮在世界坐标系下产生真实的向上速度。
+        [平稳抬腿奖励 - 绝对速度版 + 高度保持] 
+        逻辑：当左轮受到水平冲击时，鼓励左轮在世界坐标系下产生真实的向上速度，并保持一定高度。
         """
         # 1. 确定左轮索引 (双轮足通常左轮为 0)
         left_idx = 0
@@ -534,5 +598,22 @@ class BipedWF(BaseTask):
         # 4. 提取向上速度：只奖励正值（向上收缩），不奖励向下伸展
         upward_vel = torch.clamp(world_vel_z, min=0.0, max=1.0)
         
-        # 5. 线性奖励计算：接触且抬起 = 得分
-        return upward_vel * left_contact_mask
+        # 5. 添加高度奖励：鼓励在接触时抬高脚
+        # 计算相对于基座的脚高度 (Z轴)
+        foot_pos_z = self.foot_positions[:, left_idx, 2]
+        base_pos_z = self.base_position[:, 2]
+        rel_z = foot_pos_z - base_pos_z
+        
+        # 标称高度 (负值)
+        nominal_h = -(self.cfg.rewards.base_height_target - self.cfg.asset.foot_radius)
+        
+        # 计算抬升量 (相对于标称位置)
+        lift_amount = rel_z - nominal_h 
+        # 限制奖励范围，避免过度抬升，假设抬升 20-30cm 足够
+        lift_reward = torch.clamp(lift_amount, min=0.0, max=0.15)
+        
+        # 6. 组合奖励
+        # 增加高度奖励的权重 (例如 5.0，使得 0.1m 的抬升相当于 0.5 的速度奖励)
+        total_reward = (upward_vel + 5.0 * lift_reward) * left_contact_mask
+        
+        return total_reward
