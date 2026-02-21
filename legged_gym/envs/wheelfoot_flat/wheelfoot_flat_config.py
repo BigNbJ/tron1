@@ -255,10 +255,10 @@ class BipedCfgWF(BaseConfig):
             collision = -50
             action_smooth = -0.03
             orientation = -12.0
-            feet_distance = -70
+            feet_distance = -0.
             base_height = -20
 
-            encourage_wheel_up = 1.5
+            encourage_wheel_up = 2.5
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100

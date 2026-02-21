@@ -297,7 +297,7 @@ def play(args):
     if robot_type.startswith("PF"):
         commands_val[0] = 0.5
     elif robot_type == "WF_TRON1A":
-        commands_val[0] = 0.2
+        commands_val[0] = 0.5
     else:
         commands_val[0] = 1.5
     

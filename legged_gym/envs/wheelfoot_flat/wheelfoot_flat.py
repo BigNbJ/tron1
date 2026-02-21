@@ -148,6 +148,11 @@ class BipedWF(BaseTask):
         self.actions = actions
         
     def _compute_torques(self, actions):
+        # 【新增的硬编码拦截】: 强制屏蔽网络的侧摆动作输出
+        # 将左腿侧摆 (index 0) 和 右腿侧摆 (index 4) 的动作指令清零
+        actions[:, 0] = 0.0
+        actions[:, 4] = 0.0
+        
         pos_action = (
             torch.cat(
                 (
