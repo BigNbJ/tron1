@@ -228,7 +228,10 @@ class BipedCfgWF(BaseConfig):
     
     class ctbc:
         force_threshold = 20.0
-        history_length = 2
+        history_length = 3
+        ff_amplitude = 1.0
+        ff_period = 0.6
+        anneal_steps = 40000 * 24
 
     class rewards:
         class scales:
@@ -259,6 +262,7 @@ class BipedCfgWF(BaseConfig):
             base_height = -20
 
             encourage_wheel_up = 2.5
+            tracking_target_pos = 0.6
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
@@ -294,7 +298,7 @@ class BipedCfgWF(BaseConfig):
             dof_vel = 0.05
             dof_acc = 0.0025
             height_measurements = 5.0
-            contact_forces = 0.01
+            contact_forces = 1
             torque = 0.05
 
         clip_observations = 100.0

@@ -84,6 +84,9 @@ class BipedWF(BaseTask):
         self.contact_forces_feet_ema[env_ids] = 0.0
         self.contact_forces_history[env_ids] = 0.0
 
+        self.is_lifting[env_ids] = False
+        self.ff_phase[env_ids] = 0.0
+
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -107,7 +110,70 @@ class BipedWF(BaseTask):
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf | self.edge_reset_buf
 
+    def _apply_feedforward(self, actions):
+        """
+        Apply feedforward trajectory (cosine wave) to left leg based on contact trigger.
+        Fused with network actions using linear annealing.
+        """
+        # 1. 计算退火权重 k_ff
+        # 从 1.0 线性衰减到 0.0
+        # global_step_counter 是每步 +1
+        k_ff = max(0.0, 1.0 - self.global_step_counter / self.cfg.ctbc.anneal_steps)
+        
+        # 如果退火结束，直接返回原始动作（节省计算）
+        if k_ff <= 0.0:
+            return actions
+
+        # 2. 计算前馈轨迹
+        # 公式: a_ff(t) = (A/2) * (1 - cos(2*pi*t/T))
+        T = self.cfg.ctbc.ff_period
+        A = self.cfg.ctbc.ff_amplitude
+        
+        # 仅对处于抬腿状态的环境计算
+        # 注意: ff_phase 会在下面更新, 这里先用当前值计算
+        
+        # 相位比例 t/T
+        phase_ratio = self.ff_phase / T
+        
+        # 计算轨迹值 (标量/向量)
+        ff_val = (A / 2.0) * (1.0 - torch.cos(2 * math.pi * phase_ratio))
+        
+        # 3. 创建 ff_actions 张量并赋值
+        ff_actions = torch.zeros_like(actions)
+        
+        # 强制左腿优先 (Hack): 注入到左腿髋关节 (index 1) 和 左腿膝关节 (index 2)
+        # 比例 1:2
+        # 注意符号: 
+        #   Hip Flexion通常为正 -> 抬腿
+        #   Knee Flexion通常为正 (根据用户设定) -> 抬小腿
+        
+        # 仅对 is_lifting 为 True 的行生效
+        lifting_env_ids = self.is_lifting.nonzero(as_tuple=False).flatten()
+        
+        if len(lifting_env_ids) > 0:
+            # 赋值: Hip = 1 * val, Knee = 2 * val (with sign)
+            # 这里的 index 1 和 2 对应 hip_L 和 knee_L
+            ff_actions[lifting_env_ids, 1] = ff_val[lifting_env_ids] * 1.0
+            ff_actions[lifting_env_ids, 2] = ff_val[lifting_env_ids] * 2.0 
+            
+        # 4. 融合动作
+        # a_t = a_pi + k_ff * a_ff
+        fused_actions = actions + k_ff * ff_actions
+        
+        # 5. 更新状态
+        # 更新相位
+        self.ff_phase[self.is_lifting] += self.dt
+        
+        # 判断结束: 如果 ff_phase >= T, 结束抬腿
+        finished = self.ff_phase >= T
+        self.is_lifting[finished] = False
+        
+        return fused_actions
+
     def step(self, actions):
+        actions = self._apply_feedforward(actions)
+        self.global_step_counter += 1
+        
         self._action_clip(actions)
         # step physics and render each frame
         self.render()
@@ -392,6 +458,11 @@ class BipedWF(BaseTask):
             requires_grad=False
         )
 
+        # 初始化前馈控制相关的张量
+        self.ff_phase = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.is_lifting = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
+        self.global_step_counter = 0
+
     # ------------ Contact Trigger----------------
 
 
@@ -407,6 +478,20 @@ class BipedWF(BaseTask):
         
         # 将结果保存到类的属性中，供所有 Reward 共享读取
         self.filtered_xy_contact = torch.all(is_high_force_history, dim=-1)
+
+        # ----------------------------------------
+        # 新增: 触发前馈指令
+        # ----------------------------------------
+        # 1. 任意一只脚接触 (any_contact)
+        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        
+        # 2. 当前不在抬腿状态 (not is_lifting)
+        trigger = any_contact & (~self.is_lifting)
+        
+        # 3. 触发: 开启抬腿, 重置相位
+        if torch.any(trigger):
+            self.is_lifting[trigger] = True
+            self.ff_phase[trigger] = 0.0
 
     # ------------ reward functions----------------
 
@@ -622,3 +707,24 @@ class BipedWF(BaseTask):
         total_reward = (upward_vel + 5.0 * lift_reward) * left_contact_mask
         
         return total_reward
+
+    def _reward_tracking_target_pos(self):
+        # 1. 指定需要追踪的核心抬腿关节索引：左腿 hip(1), knee(2)；右腿 hip(5), knee(6)
+        track_indices = [1, 2, 5, 6]
+        
+        # 2. 计算目标位置 q_target (默认位置 + 网络动作 * 动作缩放比例)
+        q_target = self.default_dof_pos[:, track_indices] + self.actions[:, track_indices] * self.cfg.control.action_scale_pos
+        
+        # 3. 获取当前实际关节位置 q_current
+        q_current = self.dof_pos[:, track_indices]
+        
+        # 4. 计算欧氏距离误差范数 ||q - q_target||
+        pos_error = torch.norm(q_current - q_target, dim=1)
+        
+        # 5. 套用论文公式
+        reward = torch.exp(-2.0 * pos_error) - 0.2 * pos_error
+        
+        # 6. 条件奖励掩码：仅在任意一脚检测到接触（触发抬腿）时激活
+        any_contact = torch.any(self.filtered_xy_contact, dim=-1)
+        
+        return reward * any_contact.float()
