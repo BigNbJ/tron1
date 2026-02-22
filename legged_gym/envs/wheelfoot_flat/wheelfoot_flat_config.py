@@ -229,7 +229,7 @@ class BipedCfgWF(BaseConfig):
     class ctbc:
         force_threshold = 20.0
         history_length = 3
-        ff_amplitude = 1.0
+        ff_amplitude = 1.2
         ff_period = 0.6
         anneal_steps = 40000 * 24
 

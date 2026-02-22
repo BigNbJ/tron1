@@ -527,15 +527,11 @@ class BipedWF(BaseTask):
             # Original reward term
             term = torch.exp(-(height_error ** 2)/ self.cfg.rewards.nominal_foot_position_tracking_sigma)
             
-            # If filtered_xy_contact is True for this foot, we release the penalty (give full reward)
-            # This allows the foot to lift without losing the nominal position reward
-            is_contact = self.filtered_xy_contact[:, i]
-            term = torch.where(is_contact, torch.ones_like(term), term)
-            
             reward += term
             
         vel_cmd_norm = torch.norm(self.commands[:, :3], dim=1)
-        return reward / len(self.feet_indices)*torch.exp(-(vel_cmd_norm ** 2)/self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
+        final_reward = reward / len(self.feet_indices)*torch.exp(-(vel_cmd_norm ** 2)/self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
+        return torch.where(self.is_lifting, torch.ones_like(final_reward), final_reward)
     
     def _reward_same_foot_z_position(self):
         reward = 0
@@ -561,12 +557,9 @@ class BipedWF(BaseTask):
         leg_symmetry_err = (abs(foot_positions_base[:,0,1])-abs(foot_positions_base[:,1,1]))
         reward = torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
         
-        # If any foot is in contact, relax symmetry constraint as legs might be in different phases
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        # However, leg symmetry is mainly about Y position (width), which might still be relevant.
-        # But during climbing, body might tilt or shift weight, so relaxing is safer.
-        # We use torch.where to set reward to 1.0 (max reward) when contact happens
-        reward = torch.where(any_contact, torch.ones_like(reward), reward)
+        # Only if is_lifting, relax symmetry constraint as legs might be in different phases
+        # We use torch.where to set reward to 1.0 (max reward) when is_lifting is True
+        reward = torch.where(self.is_lifting, torch.ones_like(reward), reward)
         
         return reward
 
@@ -600,9 +593,8 @@ class BipedWF(BaseTask):
         # Penalize xy axes base angular velocity
         reward = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
         
-        # If any foot is in contact, allow angular velocity (tilt adjustment)
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        reward = reward * (~any_contact).float()
+        # Only if is_lifting, allow angular velocity (tilt adjustment)
+        reward = reward * (~self.is_lifting).float()
         
         return reward
 
@@ -622,17 +614,20 @@ class BipedWF(BaseTask):
 
     def _reward_dof_acc(self):
         # Penalize dof accelerations
-        return torch.sum(torch.square(self.dof_acc), dim=1)
+        cost = torch.sum(torch.square(self.dof_acc), dim=1)
+        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
 
     def _reward_action_rate(self):
         # Penalize changes in actions
-        return torch.sum(torch.square(self.actions - self.last_actions[:, :, 0]), dim=1)
+        cost = torch.sum(torch.square(self.actions - self.last_actions[:, :, 0]), dim=1)
+        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
 
     def _reward_action_smooth(self):
         # Penalize changes in actions
-        return torch.sum(
+        cost = torch.sum(
             torch.square(
                 self.actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]), dim=1)
+        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
 
     def _reward_keep_balance(self):
         return torch.ones(
@@ -648,7 +643,8 @@ class BipedWF(BaseTask):
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
+        reward = torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
+        return torch.where(self.is_lifting, torch.ones_like(reward), reward)
 
     def _reward_tracking_lin_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_lin_vel() - self.rwd_linVelTrackPrev)
@@ -658,7 +654,8 @@ class BipedWF(BaseTask):
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
+        reward = torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
+        return torch.where(self.is_lifting, torch.ones_like(reward), reward)
 
     def _reward_tracking_ang_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_ang_vel() - self.rwd_angVelTrackPrev)
