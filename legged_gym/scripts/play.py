@@ -84,15 +84,21 @@ class LivePlotter:
         self.base_height = deque(maxlen=max_len)
         self.measured_heights = deque(maxlen=max_len)
         
+        # Joint Positions (Hip & Knee)
+        self.dof_pos_hip_L = deque(maxlen=max_len)
+        self.dof_pos_knee_L = deque(maxlen=max_len)
+        self.dof_pos_hip_R = deque(maxlen=max_len)
+        self.dof_pos_knee_R = deque(maxlen=max_len)
+        
         # Initialize time
         self.current_time = 0.0
         
-        # Setup plot: 4 Rows x 2 Cols
+        # Setup plot: 5 Rows x 2 Cols (Added Row 4 for Joints)
         plt.ion()
-        self.fig, self.axs = plt.subplots(4, 2, sharex=True, figsize=(12, 12))
+        self.fig, self.axs = plt.subplots(5, 2, sharex=True, figsize=(12, 15))
         self.fig.canvas.manager.set_window_title('Live Oscilloscope')
         
-        # --- Column 1: Forces & Contact ---
+        # --- Column 1: Forces & Contact & Hip ---
         # Row 0: Force X
         self.ax_fx = self.axs[0, 0]
         self.line_fx_L, = self.ax_fx.plot([], [], label='Fx L', color='b')
@@ -122,12 +128,20 @@ class LivePlotter:
         self.line_filt_L, = self.ax_contact.plot([], [], label='Filt Contact L', color='b', linestyle='-', alpha=0.8)
         self.line_filt_R, = self.ax_contact.plot([], [], label='Filt Contact R', color='r', linestyle='-', alpha=0.8)
         self.ax_contact.set_ylabel('Contact')
-        self.ax_contact.set_xlabel('Time [s]')
         self.ax_contact.set_ylim(-0.1, 1.1)
         self.ax_contact.legend(loc='upper right', fontsize='small')
         self.ax_contact.grid(True)
         
-        # --- Column 2: Velocities & Height ---
+        # Row 4: Hip Positions (Added)
+        self.ax_hip = self.axs[4, 0]
+        self.line_hip_L, = self.ax_hip.plot([], [], label='Hip L', color='b')
+        self.line_hip_R, = self.ax_hip.plot([], [], label='Hip R', color='r')
+        self.ax_hip.set_ylabel('Hip Pos [rad]')
+        self.ax_hip.set_xlabel('Time [s]')
+        self.ax_hip.legend(loc='upper right', fontsize='small')
+        self.ax_hip.grid(True)
+        
+        # --- Column 2: Velocities & Height & Knee ---
         # Row 0: Vel X
         self.ax_vx = self.axs[0, 1]
         self.line_vx_L, = self.ax_vx.plot([], [], label='Vel X L', color='b')
@@ -157,16 +171,25 @@ class LivePlotter:
         self.line_base_h, = self.ax_h.plot([], [], label='Base H', color='k')
         self.line_measured_h, = self.ax_h.plot([], [], label='Meas H', color='g')
         self.ax_h.set_ylabel('Height [m]')
-        self.ax_h.set_xlabel('Time [s]')
         self.ax_h.legend(loc='upper right', fontsize='small')
         self.ax_h.grid(True)
+        
+        # Row 4: Knee Positions (Added)
+        self.ax_knee = self.axs[4, 1]
+        self.line_knee_L, = self.ax_knee.plot([], [], label='Knee L', color='b')
+        self.line_knee_R, = self.ax_knee.plot([], [], label='Knee R', color='r')
+        self.ax_knee.set_ylabel('Knee Pos [rad]')
+        self.ax_knee.set_xlabel('Time [s]')
+        self.ax_knee.legend(loc='upper right', fontsize='small')
+        self.ax_knee.grid(True)
 
         
     def update(self, 
                force_x_l, force_x_r, force_y_l, force_y_r, force_z_l, force_z_r,
                foot_vel_x_l, foot_vel_x_r, foot_vel_y_l, foot_vel_y_r, foot_vel_z_l, foot_vel_z_r,
                filtered_contact_l, filtered_contact_r,
-               base_height, measured_height):
+               base_height, measured_height,
+               dof_pos_hip_l, dof_pos_hip_r, dof_pos_knee_l, dof_pos_knee_r):
         self.current_time += self.dt
         
         self.time_buf.append(self.current_time)
@@ -194,6 +217,12 @@ class LivePlotter:
         # Heights
         self.base_height.append(base_height)
         self.measured_heights.append(measured_height)
+        
+        # Joint Positions
+        self.dof_pos_hip_L.append(dof_pos_hip_l)
+        self.dof_pos_hip_R.append(dof_pos_hip_r)
+        self.dof_pos_knee_L.append(dof_pos_knee_l)
+        self.dof_pos_knee_R.append(dof_pos_knee_r)
         
         self.counter += 1
         if self.counter % self.refresh_rate == 0:
@@ -226,10 +255,18 @@ class LivePlotter:
         self.line_base_h.set_data(t, list(self.base_height))
         self.line_measured_h.set_data(t, list(self.measured_heights))
         
+        # Joint Positions
+        self.line_hip_L.set_data(t, list(self.dof_pos_hip_L))
+        self.line_hip_R.set_data(t, list(self.dof_pos_hip_R))
+        self.line_knee_L.set_data(t, list(self.dof_pos_knee_L))
+        self.line_knee_R.set_data(t, list(self.dof_pos_knee_R))
+        
         # Rescale axes
         if len(t) > 0:
             self.ax_contact.set_xlim(min(t), max(t) + self.dt)
             self.ax_h.set_xlim(min(t), max(t) + self.dt)
+            self.ax_hip.set_xlim(min(t), max(t) + self.dt)
+            self.ax_knee.set_xlim(min(t), max(t) + self.dt)
             
             # Auto-scale Forces
             for ax, buf_l, buf_r in [(self.ax_fx, self.force_x_L, self.force_x_R), 
@@ -257,6 +294,20 @@ class LivePlotter:
                 min_v, max_v = min(all_h), max(all_h)
                 span = max(0.2, max_v - min_v)
                 self.ax_h.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
+            
+            # Hip
+            all_hip = list(self.dof_pos_hip_L) + list(self.dof_pos_hip_R)
+            if all_hip:
+                min_v, max_v = min(all_hip), max(all_hip)
+                span = max(0.5, max_v - min_v)
+                self.ax_hip.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
+                
+            # Knee
+            all_knee = list(self.dof_pos_knee_L) + list(self.dof_pos_knee_R)
+            if all_knee:
+                min_v, max_v = min(all_knee), max(all_knee)
+                span = max(0.5, max_v - min_v)
+                self.ax_knee.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -344,7 +395,7 @@ def play(args):
         )
 
     logger = Logger(env.dt)
-    robot_index = 44  # which robot is used for logging
+    robot_index = 3  # which robot is used for logging
     joint_index = 1  # which joint is used for logging
     stop_state_log = 300  # number of steps before plotting states
     stop_rew_log = (
@@ -433,6 +484,14 @@ def play(args):
         base_height = env.base_height[robot_index].item()
         measured_height = torch.mean(env.measured_heights[robot_index]).item()
         
+        # Get Joint Positions
+        # Indices: Left Hip=1, Left Knee=2, Right Hip=5, Right Knee=6 (Assuming WF_TRON1A structure)
+        # Verify indices from config or env properties if possible, but using provided constants for now
+        dof_pos_hip_l = env.dof_pos[robot_index, 1].item()
+        dof_pos_knee_l = env.dof_pos[robot_index, 2].item()
+        dof_pos_hip_r = env.dof_pos[robot_index, 5].item()
+        dof_pos_knee_r = env.dof_pos[robot_index, 6].item()
+        
         live_plotter.update(
             # Forces (L/R)
             force_x_l=force_x_l, force_x_r=force_x_r,
@@ -451,6 +510,10 @@ def play(args):
             # Heights
             base_height=base_height,
             measured_height=measured_height,
+            
+            # Joint Positions
+            dof_pos_hip_l=dof_pos_hip_l, dof_pos_hip_r=dof_pos_hip_r,
+            dof_pos_knee_l=dof_pos_knee_l, dof_pos_knee_r=dof_pos_knee_r,
         )
         if len(csv_rows) < 500:
             csv_rows.append(
