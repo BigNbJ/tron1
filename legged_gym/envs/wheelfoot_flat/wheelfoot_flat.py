@@ -129,10 +129,7 @@ class BipedWF(BaseTask):
         T = self.cfg.ctbc.ff_period
         A = self.cfg.ctbc.ff_amplitude
         
-        # 仅对处于抬腿状态的环境计算
-        # 注意: ff_phase 会在下面更新, 这里先用当前值计算
-        
-        # 相位比例 t/T
+        # 相位比例 t/T (num_envs, 2)
         phase_ratio = self.ff_phase / T
         
         # 计算轨迹值 (标量/向量)
@@ -141,20 +138,19 @@ class BipedWF(BaseTask):
         # 3. 创建 ff_actions 张量并赋值
         ff_actions = torch.zeros_like(actions)
         
-        # 强制左腿优先 (Hack): 注入到左腿髋关节 (index 1) 和 左腿膝关节 (index 2)
-        # 比例 1:2
-        # 注意符号: 
-        #   Hip Flexion通常为正 -> 抬腿
-        #   Knee Flexion通常为正 (根据用户设定) -> 抬小腿
-        
-        # 仅对 is_lifting 为 True 的行生效
-        lifting_env_ids = self.is_lifting.nonzero(as_tuple=False).flatten()
-        
-        if len(lifting_env_ids) > 0:
-            # 赋值: Hip = 1 * val, Knee = 2 * val (with sign)
-            # 这里的 index 1 和 2 对应 hip_L 和 knee_L
-            ff_actions[lifting_env_ids, 1] = ff_val[lifting_env_ids] * 1.0
-            ff_actions[lifting_env_ids, 2] = ff_val[lifting_env_ids] * 2.0 
+        # 左腿前馈: Hip L (1), Knee L (2)
+        # 只有 is_lifting[:, 0] 为 True 的才应用
+        mask_left = self.is_lifting[:, 0]
+        if torch.any(mask_left):
+            ff_actions[mask_left, 1] = ff_val[mask_left, 0] * 1.0
+            ff_actions[mask_left, 2] = ff_val[mask_left, 0] * 2.0 
+            
+        # 右腿前馈: Hip R (5), Knee R (6)
+        # 只有 is_lifting[:, 1] 为 True 的才应用
+        mask_right = self.is_lifting[:, 1]
+        if torch.any(mask_right):
+            ff_actions[mask_right, 5] = -1 * ff_val[mask_right, 1] * 1.0
+            ff_actions[mask_right, 6] = -1 * ff_val[mask_right, 1] * 2.0 
             
         # 4. 融合动作
         # a_t = a_pi + k_ff * a_ff
@@ -167,6 +163,7 @@ class BipedWF(BaseTask):
         # 判断结束: 如果 ff_phase >= T, 结束抬腿
         finished = self.ff_phase >= T
         self.is_lifting[finished] = False
+        self.ff_phase[finished] = 0.0 # 重置相位
         
         return fused_actions
 
@@ -323,6 +320,80 @@ class BipedWF(BaseTask):
         self.contact_forces_history = torch.roll(self.contact_forces_history, shifts=1, dims=-1)
         self.contact_forces_history[..., 0] = current_feet_forces
 
+        # Update feet air time
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        self.contact_filt = torch.logical_or(contact, self.last_contacts)
+        self.last_contacts = contact
+        
+        self.first_contact = (self.feet_air_time > 0.) * self.contact_filt
+        self.stored_air_time = self.feet_air_time.clone()
+        
+        self.feet_air_time += self.dt
+        self.feet_air_time[self.contact_filt] = 0.
+
+        # self._draw_debug_vis()
+
+    def _draw_debug_vis(self):
+        """ Draws visualizations for dubugging (slows down simulation a lot).
+            Default behaviour: draws height measurement points
+        """
+        # draw height lines
+        if not self.cfg.terrain.measure_heights and not self.cfg.terrain.critic_measure_heights:
+            return
+        if not self.viewer:
+            return
+
+        self.gym.clear_lines(self.viewer)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        
+        # plot height points for the first environment
+        env_id = 0
+        
+        # calculate points in world frame
+        base_quat = self.root_states[env_id, 3:7].unsqueeze(0)
+        base_pos = self.root_states[env_id, :3].unsqueeze(0)
+        height_points = self.height_points[env_id].unsqueeze(0)
+        
+        points = quat_apply_yaw(base_quat.repeat(1, self.num_height_points), height_points) + base_pos
+        
+        points_grid = points + self.cfg.terrain.border_size
+        points_grid = (points_grid / self.cfg.terrain.horizontal_scale).long()
+        px = points_grid[:, :, 0].view(-1)
+        py = points_grid[:, :, 1].view(-1)
+        if self.height_samples is not None:
+            px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
+            py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
+
+            # 关键修改：先将CUDA张量转到CPU，再进行索引
+            height_samples_cpu = self.height_samples.cpu()
+            heights1 = height_samples_cpu[px, py]
+            heights2 = height_samples_cpu[px + 1, py]
+            heights3 = height_samples_cpu[px, py + 1]
+            heights = torch.min(heights1, heights2)
+            heights = torch.min(heights, heights3)
+            
+            # Measured heights (z-coordinate)
+            measured_heights = heights.view(1, -1) * self.terrain.cfg.vertical_scale
+        else:
+            measured_heights = torch.zeros(1, self.num_height_points, device=self.device)
+        
+        # Prepare vertices for lines
+        # 此处.device可能是CUDA，仍需显式转到CPU再转NumPy
+        points_x = points[0, :, 0].cpu().numpy()
+        points_y = points[0, :, 1].cpu().numpy()
+        points_z = measured_heights[0].cpu().numpy()
+        
+        verts = []
+        colors = []
+        for i in range(self.num_height_points):
+            # Draw a vertical line from the measured height up by 5cm
+            verts.append([points_x[i], points_y[i], points_z[i]])
+            verts.append([points_x[i], points_y[i], points_z[i] + 0.05])
+            colors.append([1.0, 0.0, 0.0]) # Red
+        
+        self.gym.add_lines(self.viewer, self.envs[env_id], self.num_height_points, verts, colors)
+
+
     def _resample_commands(self, env_ids):
         """Randommly select commands of some environments
 
@@ -418,6 +489,7 @@ class BipedWF(BaseTask):
 
     def _init_buffers(self):
         super()._init_buffers()
+
         self.wheel_lin_vel = torch.zeros_like(self.foot_velocities)
         self.wheel_ang_vel = torch.zeros_like(self.base_ang_vel)
 
@@ -459,9 +531,13 @@ class BipedWF(BaseTask):
         )
 
         # 初始化前馈控制相关的张量
-        self.ff_phase = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
-        self.is_lifting = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
+        self.ff_phase = torch.zeros(self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False)
+        self.is_lifting = torch.zeros(self.num_envs, 2, dtype=torch.bool, device=self.device, requires_grad=False)
+        # self.lifting_leg is no longer needed with 2D is_lifting
         self.global_step_counter = 0
+        
+        self.first_contact = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        self.stored_air_time = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.float, device=self.device, requires_grad=False)
 
     # ------------ Contact Trigger----------------
 
@@ -483,15 +559,29 @@ class BipedWF(BaseTask):
         # 新增: 触发前馈指令
         # ----------------------------------------
         # 1. 任意一只脚接触 (any_contact)
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
+        # any_contact = torch.any(self.filtered_xy_contact, dim=1)
         
-        # 2. 当前不在抬腿状态 (not is_lifting)
-        trigger = any_contact & (~self.is_lifting)
+        # 2. 检查触发条件
+        # is_lifting 现在是 (num_envs, 2)，对应左右腿
         
-        # 3. 触发: 开启抬腿, 重置相位
-        if torch.any(trigger):
-            self.is_lifting[trigger] = True
-            self.ff_phase[trigger] = 0.0
+        # 左腿触发: 左脚接触 & 左腿未在抬腿
+        trigger_left = self.filtered_xy_contact[:, 0] & (~self.is_lifting[:, 0])
+        
+        # 右腿触发: 右脚接触 & 右腿未在抬腿 & (左脚未接触 - 保持之前的左腿优先逻辑?)
+        # 为了保持逻辑一致性，这里可以根据需要保留或移除左腿优先
+        # 暂时保留 "左脚未接触" 作为一个额外的抑制条件，避免双腿同时触发?
+        # 原逻辑: trigger_right = right_contact & not_lifting & (~left_contact)
+        # 现逻辑: trigger_right = right_contact & (~is_lifting_right) & (~left_contact)
+        trigger_right = self.filtered_xy_contact[:, 1] & (~self.is_lifting[:, 1]) & (~self.filtered_xy_contact[:, 0])
+        
+        # 3. 更新状态
+        if torch.any(trigger_left):
+            self.is_lifting[trigger_left, 0] = True
+            self.ff_phase[trigger_left, 0] = 0.0
+            
+        if torch.any(trigger_right):
+            self.is_lifting[trigger_right, 1] = True
+            self.ff_phase[trigger_right, 1] = 0.0
 
     # ------------ reward functions----------------
 
@@ -502,11 +592,6 @@ class BipedWF(BaseTask):
         )
         reward = torch.clip(self.cfg.rewards.min_feet_distance - feet_distance, 0, 1) + \
                  torch.clip(feet_distance - self.cfg.rewards.max_feet_distance, 0, 1)
-        
-        # If any foot is in contact (climbing), relax the feet distance constraint
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        reward = reward * (~any_contact).float()
-        
         return reward
 
     def _reward_collision(self):
@@ -523,15 +608,14 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
             height_error = nominal_base_height - foot_positions_base[:, i, 2]
+            leg_reward = torch.exp(-(height_error ** 2)/ self.cfg.rewards.nominal_foot_position_tracking_sigma)
             
-            # Original reward term
-            term = torch.exp(-(height_error ** 2)/ self.cfg.rewards.nominal_foot_position_tracking_sigma)
-            
-            reward += term
-            
+            is_stance = ~self.is_lifting[:, i]
+            leg_reward = torch.where(is_stance, leg_reward, torch.ones_like(leg_reward))
+            reward += leg_reward
+
         vel_cmd_norm = torch.norm(self.commands[:, :3], dim=1)
-        final_reward = reward / len(self.feet_indices)*torch.exp(-(vel_cmd_norm ** 2)/self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
-        return torch.where(self.is_lifting, torch.ones_like(final_reward), final_reward)
+        return reward / len(self.feet_indices)*torch.exp(-(vel_cmd_norm ** 2)/self.cfg.rewards.nominal_foot_position_tracking_sigma_wrt_v)
     
     def _reward_same_foot_z_position(self):
         reward = 0
@@ -540,14 +624,7 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         foot_z_position_err = foot_positions_base[:,0,2] - foot_positions_base[:,1,2]
-        
-        cost = foot_z_position_err ** 2
-        
-        # Use filtered_xy_contact to check for contact
-        # If filtered_xy_contact is True for any foot, release the penalty
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        
-        return cost * (~any_contact).float()
+        return foot_z_position_err ** 2
 
     def _reward_leg_symmetry(self):
         foot_positions_base = self.foot_positions - \
@@ -555,57 +632,30 @@ class BipedWF(BaseTask):
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         leg_symmetry_err = (abs(foot_positions_base[:,0,1])-abs(foot_positions_base[:,1,1]))
-        reward = torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
-        
-        # Only if is_lifting, relax symmetry constraint as legs might be in different phases
-        # We use torch.where to set reward to 1.0 (max reward) when is_lifting is True
-        reward = torch.where(self.is_lifting, torch.ones_like(reward), reward)
-        
-        return reward
+        return torch.exp(-(leg_symmetry_err ** 2)/ self.cfg.rewards.leg_symmetry_tracking_sigma)
 
     def _reward_same_foot_x_position(self):
+        reward = 0
         foot_positions_base = self.foot_positions - \
                             (self.base_position).unsqueeze(1).repeat(1, len(self.feet_indices), 1)
         for i in range(len(self.feet_indices)):
             foot_positions_base[:, i, :] = quat_rotate_inverse(self.base_quat, foot_positions_base[:, i, :] )
         foot_x_position_err = foot_positions_base[:,0,0] - foot_positions_base[:,1,0]
         # reward = torch.exp(-(foot_x_position_err ** 2)/ self.cfg.rewards.foot_x_position_sigma)
-        
-        cost = torch.abs(foot_x_position_err)
-        
-        # Use filtered_xy_contact to check for contact
-        # If filtered_xy_contact is True for any foot, release the penalty
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        
-        return cost * (~any_contact).float()
+        reward = torch.abs(foot_x_position_err)
+        return reward
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
-        reward = torch.square(self.base_lin_vel[:, 2])
-        
-        # If any foot is in contact, allow z velocity (jumping/lifting)
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        reward = reward * (~any_contact).float()
-        
-        return reward
+        return torch.square(self.base_lin_vel[:, 2])
 
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
-        reward = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
-        
-        # Only if is_lifting, allow angular velocity (tilt adjustment)
-        reward = reward * (~self.is_lifting).float()
-        
-        return reward
+        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
 
     def _reward_orientation(self):
         # Penalize non flat base orientation
         reward = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
-        
-        # If any foot is in contact, allow orientation tilt (pitch/roll)
-        any_contact = torch.any(self.filtered_xy_contact, dim=1)
-        reward = reward * (~any_contact).float()
-        
         return reward
 
     def _reward_torques(self):
@@ -614,20 +664,17 @@ class BipedWF(BaseTask):
 
     def _reward_dof_acc(self):
         # Penalize dof accelerations
-        cost = torch.sum(torch.square(self.dof_acc), dim=1)
-        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
+        return torch.sum(torch.square(self.dof_acc), dim=1)
 
     def _reward_action_rate(self):
         # Penalize changes in actions
-        cost = torch.sum(torch.square(self.actions - self.last_actions[:, :, 0]), dim=1)
-        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
+        return torch.sum(torch.square(self.actions - self.last_actions[:, :, 0]), dim=1)
 
     def _reward_action_smooth(self):
         # Penalize changes in actions
-        cost = torch.sum(
+        return torch.sum(
             torch.square(
                 self.actions - 2 * self.last_actions[:, :, 0] + self.last_actions[:, :, 1]), dim=1)
-        return torch.where(self.is_lifting, torch.zeros_like(cost), cost)
 
     def _reward_keep_balance(self):
         return torch.ones(
@@ -643,8 +690,7 @@ class BipedWF(BaseTask):
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        reward = torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
-        return torch.where(self.is_lifting, torch.ones_like(reward), reward)
+        return torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma)
 
     def _reward_tracking_lin_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_lin_vel() - self.rwd_linVelTrackPrev)
@@ -654,8 +700,7 @@ class BipedWF(BaseTask):
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        reward = torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
-        return torch.where(self.is_lifting, torch.ones_like(reward), reward)
+        return torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
 
     def _reward_tracking_ang_vel_pb(self):
         delta_phi = ~self.reset_buf * (self._reward_tracking_ang_vel() - self.rwd_angVelTrackPrev)
@@ -671,25 +716,24 @@ class BipedWF(BaseTask):
     def _reward_encourage_wheel_up(self):
         """
         [平稳抬腿奖励 - 绝对速度版 + 高度保持] 
-        逻辑：当左轮受到水平冲击时，鼓励左轮在世界坐标系下产生真实的向上速度，并保持一定高度。
+        逻辑：当某只脚触发抬腿状态 (is_lifting) 时，鼓励该脚在世界坐标系下产生真实的向上速度，并保持一定高度。
         """
-        # 1. 确定左轮索引 (双轮足通常左轮为 0)
-        left_idx = 0
+        # 1. 获取两只脚的 lifting 掩码 (num_envs, 2)
+        lifting_mask = self.is_lifting.float()
         
-        # 2. 获取世界坐标系下的左轮 Z 轴绝对速度
-        world_vel_z = self.foot_velocities[:, left_idx, 2]
+        # 2. 获取两只脚的 Z 轴绝对速度 (num_envs, 2)
+        # self.foot_velocities shape: (num_envs, num_feet, 3)
+        # 取前两只脚
+        feet_vel_z = self.foot_velocities[:, :2, 2]
         
-        # 3. 获取我们之前在 post_physics_step 中更新好的 XY 接触掩码
-        left_contact_mask = self.filtered_xy_contact[:, left_idx].float()
+        # 3. 提取向上速度：只奖励正值（向上收缩），不奖励向下伸展
+        upward_vel = torch.clamp(feet_vel_z, min=0.0, max=1.0)
         
-        # 4. 提取向上速度：只奖励正值（向上收缩），不奖励向下伸展
-        upward_vel = torch.clamp(world_vel_z, min=0.0, max=1.0)
-        
-        # 5. 添加高度奖励：鼓励在接触时抬高脚
+        # 4. 添加高度奖励：鼓励在接触时抬高脚
         # 计算相对于基座的脚高度 (Z轴)
-        foot_pos_z = self.foot_positions[:, left_idx, 2]
-        base_pos_z = self.base_position[:, 2]
-        rel_z = foot_pos_z - base_pos_z
+        feet_pos_z = self.foot_positions[:, :2, 2]
+        base_pos_z = self.base_position[:, 2].unsqueeze(1)
+        rel_z = feet_pos_z - base_pos_z
         
         # 标称高度 (负值)
         nominal_h = -(self.cfg.rewards.base_height_target - self.cfg.asset.foot_radius)
@@ -699,29 +743,61 @@ class BipedWF(BaseTask):
         # 限制奖励范围，避免过度抬升，假设抬升 20-30cm 足够
         lift_reward = torch.clamp(lift_amount, min=0.0, max=0.15)
         
-        # 6. 组合奖励
+        # 5. 组合奖励
         # 增加高度奖励的权重 (例如 5.0，使得 0.1m 的抬升相当于 0.5 的速度奖励)
-        total_reward = (upward_vel + 5.0 * lift_reward) * left_contact_mask
+        # 乘以 lifting_mask，只对正在抬腿的脚进行奖励
+        reward_per_leg = (upward_vel + 5.0 * lift_reward) * lifting_mask
+        
+        # 6. 求和
+        total_reward = torch.sum(reward_per_leg, dim=1)
         
         return total_reward
 
     def _reward_tracking_target_pos(self):
         # 1. 指定需要追踪的核心抬腿关节索引：左腿 hip(1), knee(2)；右腿 hip(5), knee(6)
-        track_indices = [1, 2, 5, 6]
+        track_indices_left = [1, 2]
+        track_indices_right = [5, 6]
         
-        # 2. 计算目标位置 q_target (默认位置 + 网络动作 * 动作缩放比例)
-        q_target = self.default_dof_pos[:, track_indices] + self.actions[:, track_indices] * self.cfg.control.action_scale_pos
+        # 2. 获取两只脚的 lifting 掩码 (num_envs, 2)
+        lifting_mask = self.is_lifting.float()
         
-        # 3. 获取当前实际关节位置 q_current
-        q_current = self.dof_pos[:, track_indices]
+        # 3. 计算左腿奖励
+        # 目标位置
+        q_target_left = self.default_dof_pos[:, track_indices_left] + self.actions[:, track_indices_left] * self.cfg.control.action_scale_pos
+        # 当前位置
+        q_current_left = self.dof_pos[:, track_indices_left]
+        # 误差
+        pos_error_left = torch.norm(q_current_left - q_target_left, dim=1)
+        # 奖励公式
+        reward_left = (torch.exp(-2.0 * pos_error_left) - 0.2 * pos_error_left) * lifting_mask[:, 0]
         
-        # 4. 计算欧氏距离误差范数 ||q - q_target||
-        pos_error = torch.norm(q_current - q_target, dim=1)
+        # 4. 计算右腿奖励
+        # 目标位置
+        q_target_right = self.default_dof_pos[:, track_indices_right] + self.actions[:, track_indices_right] * self.cfg.control.action_scale_pos
+        # 当前位置
+        q_current_right = self.dof_pos[:, track_indices_right]
+        # 误差
+        pos_error_right = torch.norm(q_current_right - q_target_right, dim=1)
+        # 奖励公式
+        reward_right = (torch.exp(-2.0 * pos_error_right) - 0.2 * pos_error_right) * lifting_mask[:, 1]
         
-        # 5. 套用论文公式
-        reward = torch.exp(-2.0 * pos_error) - 0.2 * pos_error
+        # 5. 求和
+        return reward_left + reward_right
+
+    def _reward_feet_air_time(self):
+        # Reward long steps
+        # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
+        # stored_air_time and first_contact are updated in post_physics_step_callback
         
-        # 6. 条件奖励掩码：仅在任意一脚检测到接触（触发抬腿）时激活
-        any_contact = torch.any(self.filtered_xy_contact, dim=-1)
+        # Encourage feet_air_time, acting only during lifting phase (is_lifting is True)
         
-        return reward * any_contact.float()
+        # lifting_mask: (num_envs, 2)
+        lifting_mask = self.is_lifting.float()
+        
+        # Reward: (air_time - max_air_time) * first_contact * is_lifting
+        rew_airTime = torch.sum((self.stored_air_time - self.cfg.rewards.max_air_time) * self.first_contact.float() * lifting_mask, dim=1)
+        
+        # No reward for zero command
+        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1
+        
+        return rew_airTime

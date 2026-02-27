@@ -245,28 +245,30 @@ class BipedCfgWF(BaseConfig):
             tracking_ang_vel_pb = 0.2
 
             # regulation related rewards
-            nominal_foot_position = 4.0
+            nominal_foot_position = 2.0
             leg_symmetry = 0.5
-            same_foot_x_position = -20 # 0.5
-            same_foot_z_position = -50
+            same_foot_x_position = -2.0 # 0.5
+            same_foot_z_position = 0.0
             lin_vel_z = -0.3
-            ang_vel_xy = -0.3
-            torques = -0.00016
-            dof_acc = -1.5e-7
-            action_rate = -0.02
+            ang_vel_xy = -0.01
+            torques = -1e-5
+            dof_acc = -2.5e-7
+            action_rate = -0.01
             dof_pos_limits = -2.0
             collision = -50
-            action_smooth = -0.03
+            action_smooth = -0.005
             orientation = -12.0
             feet_distance = -0.
             base_height = -20
 
             encourage_wheel_up = 2.5
             tracking_target_pos = 0.6
+            feet_air_time = 1.0
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
         clip_reward = 100
         clip_single_reward = 5
+        max_air_time = 0.5
         tracking_sigma = 0.2  # tracking reward = exp(-error^2/sigma)
         ang_tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
         nominal_foot_position_tracking_sigma = 0.005

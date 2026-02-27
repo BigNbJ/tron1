@@ -84,18 +84,20 @@ class LivePlotter:
         self.base_height = deque(maxlen=max_len)
         self.measured_heights = deque(maxlen=max_len)
         
-        # Joint Positions (Hip & Knee)
+        # Joint Positions (Hip & Knee & Abad)
         self.dof_pos_hip_L = deque(maxlen=max_len)
         self.dof_pos_knee_L = deque(maxlen=max_len)
+        self.dof_pos_abad_L = deque(maxlen=max_len)
         self.dof_pos_hip_R = deque(maxlen=max_len)
         self.dof_pos_knee_R = deque(maxlen=max_len)
+        self.dof_pos_abad_R = deque(maxlen=max_len)
         
         # Initialize time
         self.current_time = 0.0
         
-        # Setup plot: 5 Rows x 2 Cols (Added Row 4 for Joints)
+        # Setup plot: 6 Rows x 2 Cols (Added Row 5 for Abad)
         plt.ion()
-        self.fig, self.axs = plt.subplots(5, 2, sharex=True, figsize=(12, 15))
+        self.fig, self.axs = plt.subplots(6, 2, sharex=True, figsize=(12, 18))
         self.fig.canvas.manager.set_window_title('Live Oscilloscope')
         
         # --- Column 1: Forces & Contact & Hip ---
@@ -140,6 +142,15 @@ class LivePlotter:
         self.ax_hip.set_xlabel('Time [s]')
         self.ax_hip.legend(loc='upper right', fontsize='small')
         self.ax_hip.grid(True)
+        
+        # Row 5: Abad Positions (Added)
+        self.ax_abad = self.axs[5, 0]
+        self.line_abad_L, = self.ax_abad.plot([], [], label='Abad L', color='b')
+        self.line_abad_R, = self.ax_abad.plot([], [], label='Abad R', color='r')
+        self.ax_abad.set_ylabel('Abad Pos [rad]')
+        self.ax_abad.set_xlabel('Time [s]')
+        self.ax_abad.legend(loc='upper right', fontsize='small')
+        self.ax_abad.grid(True)
         
         # --- Column 2: Velocities & Height & Knee ---
         # Row 0: Vel X
@@ -189,7 +200,7 @@ class LivePlotter:
                foot_vel_x_l, foot_vel_x_r, foot_vel_y_l, foot_vel_y_r, foot_vel_z_l, foot_vel_z_r,
                filtered_contact_l, filtered_contact_r,
                base_height, measured_height,
-               dof_pos_hip_l, dof_pos_hip_r, dof_pos_knee_l, dof_pos_knee_r):
+               dof_pos_hip_l, dof_pos_hip_r, dof_pos_knee_l, dof_pos_knee_r, dof_pos_abad_l, dof_pos_abad_r):
         self.current_time += self.dt
         
         self.time_buf.append(self.current_time)
@@ -223,6 +234,8 @@ class LivePlotter:
         self.dof_pos_hip_R.append(dof_pos_hip_r)
         self.dof_pos_knee_L.append(dof_pos_knee_l)
         self.dof_pos_knee_R.append(dof_pos_knee_r)
+        self.dof_pos_abad_L.append(dof_pos_abad_l)
+        self.dof_pos_abad_R.append(dof_pos_abad_r)
         
         self.counter += 1
         if self.counter % self.refresh_rate == 0:
@@ -260,6 +273,8 @@ class LivePlotter:
         self.line_hip_R.set_data(t, list(self.dof_pos_hip_R))
         self.line_knee_L.set_data(t, list(self.dof_pos_knee_L))
         self.line_knee_R.set_data(t, list(self.dof_pos_knee_R))
+        self.line_abad_L.set_data(t, list(self.dof_pos_abad_L))
+        self.line_abad_R.set_data(t, list(self.dof_pos_abad_R))
         
         # Rescale axes
         if len(t) > 0:
@@ -267,6 +282,7 @@ class LivePlotter:
             self.ax_h.set_xlim(min(t), max(t) + self.dt)
             self.ax_hip.set_xlim(min(t), max(t) + self.dt)
             self.ax_knee.set_xlim(min(t), max(t) + self.dt)
+            self.ax_abad.set_xlim(min(t), max(t) + self.dt)
             
             # Auto-scale Forces
             for ax, buf_l, buf_r in [(self.ax_fx, self.force_x_L, self.force_x_R), 
@@ -308,6 +324,13 @@ class LivePlotter:
                 min_v, max_v = min(all_knee), max(all_knee)
                 span = max(0.5, max_v - min_v)
                 self.ax_knee.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
+            
+            # Abad
+            all_abad = list(self.dof_pos_abad_L) + list(self.dof_pos_abad_R)
+            if all_abad:
+                min_v, max_v = min(all_abad), max(all_abad)
+                span = max(0.5, max_v - min_v)
+                self.ax_abad.set_ylim(min_v - 0.1*span, max_v + 0.1*span)
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -395,7 +418,7 @@ def play(args):
         )
 
     logger = Logger(env.dt)
-    robot_index = 3  # which robot is used for logging
+    robot_index = 0  # which robot is used for logging
     joint_index = 1  # which joint is used for logging
     stop_state_log = 300  # number of steps before plotting states
     stop_rew_log = (
@@ -491,6 +514,8 @@ def play(args):
         dof_pos_knee_l = env.dof_pos[robot_index, 2].item()
         dof_pos_hip_r = env.dof_pos[robot_index, 5].item()
         dof_pos_knee_r = env.dof_pos[robot_index, 6].item()
+        dof_pos_abad_l = env.dof_pos[robot_index, 0].item()
+        dof_pos_abad_r = env.dof_pos[robot_index, 4].item()
         
         live_plotter.update(
             # Forces (L/R)
@@ -514,6 +539,7 @@ def play(args):
             # Joint Positions
             dof_pos_hip_l=dof_pos_hip_l, dof_pos_hip_r=dof_pos_hip_r,
             dof_pos_knee_l=dof_pos_knee_l, dof_pos_knee_r=dof_pos_knee_r,
+            dof_pos_abad_l=dof_pos_abad_l, dof_pos_abad_r=dof_pos_abad_r,
         )
         if len(csv_rows) < 500:
             csv_rows.append(
