@@ -89,7 +89,7 @@ class BipedCfgWF(BaseConfig):
         )
 
     class commands:
-        curriculum = True
+        curriculum = False
         smooth_max_lin_vel_x = 2.0
         smooth_max_lin_vel_y = 1.0
         non_smooth_max_lin_vel_x = 1.0

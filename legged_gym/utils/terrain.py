@@ -218,7 +218,7 @@ class Terrain:
 
 
         step_height *= -1
-        terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.61, step_height=0.5 * step_height,
+        terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.61, step_height=0.8 * step_height,
                                                     platform_size=3.)
 
         return terrain

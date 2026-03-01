@@ -104,7 +104,7 @@ class BipedWF(BaseTask):
             )
         if self.cfg.terrain.curriculum and self.cfg.commands.curriculum:
             self.extras["episode"]["max_command_x"] = torch.mean(
-                self.command_ranges["lin_vel_x"][self.smooth_slope_idx, 1].float()
+                self.command_ranges["lin_vel_x"][self.none_smooth_idx, 1].float()
             )
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
